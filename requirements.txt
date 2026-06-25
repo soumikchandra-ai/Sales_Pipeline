@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+httpx
+streamlit
+pandas
+numpy
+matplotlib
+plotly
+bcrypt
+python-jose[cryptography]
+python-multipart
+pydantic
