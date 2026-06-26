@@ -2,3 +2,11 @@ vsales/
 .env
 __pycache__/
 *.db
+*.pyc
+*.pyo
+*.pyd
+.Python
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

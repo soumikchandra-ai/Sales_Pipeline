@@ -8,6 +8,7 @@ numpy
 matplotlib
 plotly
 bcrypt
-python-jose[cryptography]
+python-jose
 python-multipart
 pydantic
+python-dotenv
