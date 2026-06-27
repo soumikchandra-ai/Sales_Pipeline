@@ -38,7 +38,7 @@ class RawSale(Base):
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
     
     uploader = relationship("User", back_populates="sales")
-    processed = relationship("ProcessedSale", back_populates="raw_sales", uselist=False)
+    processed = relationship("ProcessedSale", back_populates="raw_sale", uselist=False)
     
     def __repr__(self):
         return f"RawSale(id={self.id}, product='{self.product}', status='{self.status}')"
@@ -50,11 +50,11 @@ class ProcessedSale(Base):
     raw_id = Column(Integer, ForeignKey("raw_sales.id"), nullable=False, unique=True)
     total = Column(Float, nullable=False)           #qty*price
     tax = Column(Float, nullable=False, default=0.0)
-    discount = Column(Float, nullable=False, default=True)
+    discount = Column(Float, nullable=False, default=0.0)
     final_amount= Column(Float, nullable=False)     #total+tax-discount
-    processed_at = Column(Float, default=datetime.now(timezone.utc))
+    processed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
-    raw_sale = relationship("RawSale",  back_populates="processed_sales")
+    raw_sale = relationship("RawSale",  back_populates="processed")
     
     def __repr__(self):
         return f"ProcessedSale(id={self.id}, raw_id={self.raw_id}, final_amount={self.final_amount})"
