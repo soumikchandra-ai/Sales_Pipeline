@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from datetime import timedelta
 from backend.models import User
 from backend.schemas import UserRegisterSchema, UserLoginSchema, TokenResponseSchema, UserResponseSchema
-from backend.auth import hash_password, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user
+from backend.auth import hash_password, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user, require_role, require_admin, require_viewer
 
 app=FastAPI(
     title="Sales pipeline API",
@@ -34,7 +34,7 @@ def register(user_data: UserRegisterSchema, db:Session = Depends(get_db)):
         )
     
     allowed_roles=["admin","viewer"]
-    role = user_data.role if user_data.role not in allowed_roles else "viewer"
+    role = user_data.role if user_data.role in allowed_roles else "viewer"
     hashed = hash_password(user_data.password)
     
     new_user = User(
@@ -71,7 +71,7 @@ def login(user_data: UserLoginSchema, db:Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
-            headers={"WWW-Authenticate":"Bearers"}
+            headers={"WWW-Authenticate":"Bearer"}
         )
         
     token_data = {
@@ -90,9 +90,76 @@ def login(user_data: UserLoginSchema, db:Session = Depends(get_db)):
         token_type="bearer"
     )
     
-@app.get("auth/me",tags=["Auth"])
+@app.get("/auth/me",tags=["Auth"])
 def get_me(current_user:User = Depends(get_current_user)):
     """
     Return info about the currently logged in User
     """
-    return UserResponseSchema.model_validate(current_user)
+    return {
+        "id":current_user.id,
+        "username":current_user.username,
+        "role":current_user.role,
+        "message":f"Hello, {current_user.username}! You are logged in as {current_user.role}"
+    }
+
+#Admin-Only Routes
+@app.get("/admin/dashboard",tags=["Admin"])
+def admin_dashboard(current_user: User= require_admin):
+    """
+    Admin only routes. Users whose role is admin can only access this.
+    """
+    return{
+        "message":f"Welcome to the Admin Dashboard, {current_user.username}!",
+        "role":current_user.role,
+        "access_level":"full",
+        "available_actions":[
+            "View all Users",
+            "Process sales Data",
+            "Delete records",
+            "View all reports"
+        ]
+    }
+
+@app.get("/admin/users",tags=["Admin"])
+def list_all_users(current_user: User = require_admin, db: Session = Depends(get_db)):
+    "Admin route only to list all the Users"
+    users= db.query(User).all() #Returns a list of all User objects from the database
+    
+    return{
+        "total_users":len(users),
+        "users":[
+            {
+                "id":u.id,
+                "username":u.username,
+                "role":u.role,
+                "created_at":u.created_at
+            }
+            for u in users
+        ]
+    }
+    
+#Viewer Routes
+@app.get("/viewer/data",tags=["Viewer"])
+def viewer_data(current_user: User= require_viewer):
+    "Viewer route: Both viewer and admin can access this."
+    return {
+        "message":f"Welcome to the data view {current_user.username}",
+        "role":current_user.role,
+        "access_level":"read_only",
+        "note":"You can view sales data here. Upload and processing requires admin access."
+    }
+    
+@app.get("/viewer/summary",tags=["Viewer"])
+def viewer_summary(current_user: User= require_viewer):
+    "Shows a placeholder summary. Connected to the real sales data."
+    return {
+        "message":"Sales summary appear here",
+        "accessed_by":current_user.username,
+        "role":current_user.role,
+        "placeholder_stats":{
+            "total_sales":0,
+            "total_revenue":0.0,
+            "pending_records":0,
+            "processed_records":0
+        }
+    }

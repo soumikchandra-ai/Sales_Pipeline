@@ -45,9 +45,9 @@ def create_access_token(data:dict, expires_delta:Optional[timedelta]=None)->str:
     to_encode = data.copy()
     
     if expires_delta:
-        expire = datetime.time(timezone.utc) + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode.update({"exp":expire})
     
@@ -59,7 +59,7 @@ def decode_access_token(token:str)->Optional[dict]:
     Decodes and validates a JWT token
     """
     try:
-        payload = jwt.encode(token, SECRET_KEY, algorithm=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except JWTError:
         return None
@@ -85,10 +85,33 @@ def get_current_user(token:str= Depends(oauth2_scheme), db: Session = Depends(ge
     
     return user
 
-def current_admin(current_user:User = Depends(get_current_user))->User:
-    if current_user.role!="admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    return current_user
+def require_role(required_role:str):
+    """
+    Dependency Factory : A function that returns another function.
+    How it works:
+        require_role("admin")-> returns a function that only lets admins through
+        require_role("viewer")-> returns a function that only lets viewers through
+    """
+    
+    def role_checker(current_user:User = Depends(get_current_user))->User:
+        """
+        The dependency function returned by require_role
+        """
+        ROLE_HIERARCHY ={
+            "viewer":["viewer","admin"], #viewer route allows both viewer and admin users
+            "admin":["admin"]            #admin route allows only admin users
+        }
+        
+        allowed_roles = ROLE_HIERARCHY.get(required_role,[required_role])
+        
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(f"Access Denied. This role requires role: '{required_role}'. Your role is '{current_user.role}'")
+            )
+        
+        return current_user
+    return role_checker
+
+require_admin = Depends(require_role("admin"))
+require_viewer = Depends(require_role("viewer"))
