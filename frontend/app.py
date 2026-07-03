@@ -3,6 +3,9 @@ import os
 import streamlit as st
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from frontend.login import show_login_page
+from frontend.upload import show_upload_page
+from frontend.pipeline import show_pipeline_page
+from frontend.dashboard import show_dashboard_page
 
 st.set_page_config(
     page_title="Sales Pipeline Dashboard",
@@ -33,14 +36,18 @@ else:
         st.title("Sales Pipeline")
         st.markdown("---")
         
-        st.markdown(f"**User:** {st.session_state["username"]}")
-        st.markdown(f"**Role:** {st.session_state["role"]}")
+        st.markdown(f"**User:** {st.session_state['username']}")
+        st.markdown(f"**Role:** {st.session_state['role']}")
         st.markdown("---")
         
         st.subheader("Navigation")
+        if st.session_state["role"]=="admin":
+            nav_options=["Dashboard","Upload","Pipeline"]
+        else:
+            nav_options=["Dashboard"]
         page = st.radio(
             "Go to:",
-            options=["Upload","Pipeline","Dashboard"],
+            options=nav_options,
             label_visibility="collapsed"
         )
         st.markdown("---")
@@ -48,13 +55,11 @@ else:
         if st.button("Logout ",use_container_width=True):
             logout()
     if page =="Upload":
-        st.title("Upload Sales Data")
-        st.info("....")
+        show_upload_page()
         
     elif page =="Pipeline":
-        st.title("Run Pipeline")
-        st.info("...")
+        show_pipeline_page()
+    
     elif page == "Dashboard":
-        st.title("Sales Dashboard")
-        st.info("...")
+        show_dashboard_page()
         

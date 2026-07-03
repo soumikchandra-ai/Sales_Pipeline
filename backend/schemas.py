@@ -1,7 +1,7 @@
 #To validate the incoming request and the outgoing response
 from pydantic import BaseModel, Field ,field_validator
 from typing import Optional
-from datetime import date, datetime
+from datetime import date as date_type , datetime
 
 #Auth Schemas
 class UserRegisterSchema(BaseModel):
@@ -54,7 +54,7 @@ class RawSaleCreate(BaseModel):
     """
     Schema for creating a new raw sale record.
     """
-    sale_date: date= Field(...,description="Date the sale happened (YYY-MM-DD format)",example="2026-05-12")
+    date: date_type = Field(...,description="Date the sale happened (YYYY-MM-DD format)",example="2026-05-12")
     product:str =Field(...,min_length=1,max_length=200,description="Name of the product sold",example="Basmati Rice 5kg")
     category: str =Field(...,min_length=1,max_length=100,description="Product categoory",example="Groceries")
     qty:int =Field(...,gt=0,description="Quantity Sold",example=3)
@@ -66,11 +66,11 @@ class RawSaleCreate(BaseModel):
         "Custom validator: removes leading and trailing spaces."
         return value.strip()
     
-    @field_validator("sale_date")
+    @field_validator("date")
     @classmethod
-    def date_not_in_future(cls, value: date) -> date:
+    def date_not_in_future(cls, value: date_type) -> date_type:
         "Custom validator: Sale data cannot be in future"
-        if value>date.today():
+        if value>date_type.today():
             raise ValueError("Sale data cannot be in future")
         return value
     
@@ -80,7 +80,7 @@ class RawSaleCreate(BaseModel):
 class RawSaleResponse(BaseModel):
     "Schema for returing a raw sale record from database."
     id:int
-    sale_date:date
+    date:date_type
     product:str
     category:str
     qty:int

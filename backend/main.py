@@ -179,9 +179,10 @@ def upload_manual_sale(sale_data:RawSaleCreate,current_user:User=require_admin,d
         new_sale = RawSale(
             date=datetime.combine(sale_data.date,datetime.min.time()),
             product=sale_data.product,
+            category=sale_data.category,
             qty=sale_data.qty,
             price=sale_data.price,
-            upload_by=current_user.id,
+            uploaded_by=current_user.id,
             status="pending"
         )
         db.add(new_sale)
@@ -193,7 +194,7 @@ def upload_manual_sale(sale_data:RawSaleCreate,current_user:User=require_admin,d
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save the sale record. Error: str{e}"
+            detail=f"Failed to save the sale record. Error: {str(e)}"
         )
         
 @app.post("/sales/upload-csv",response_model=CSVUploadResponse,tags=["Sales"],status_code=status.HTTP_201_CREATED)
@@ -215,14 +216,14 @@ async def upload_csv(file:UploadFile=File(...),current_user:User=require_admin,d
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="File is empty."
             )
-        df=pd.read_cv(io.BytesIO(contents))
+        df=pd.read_csv(io.BytesIO(contents))
         
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Could not read the CSV File."
+            detail=f"Could not read the CSV File. Error: {str(e)}"
         )
     
     df.columns = df.columns.str.strip().str.lower()
@@ -354,7 +355,7 @@ def get_raw_sales(status_filter: Optional[str]=Query(
             detail=f"Failed to fetch raw sales. Error: {str(e)}"
         )
         
-@app.get("/sales/raw/{sales_id}",response_model=RawSaleResponse,tags=["Sales"])
+@app.get("/sales/raw/{sale_id}",response_model=RawSaleResponse,tags=["Sales"])
 def get_raw_sale_by_id(sale_id:int, current_user:User=require_viewer,db:Session=Depends(get_db)):
     "Get a single record by sale_id"
     try:
@@ -382,6 +383,5 @@ def get_processed_sales(current_user:User=require_viewer,db:Session=Depends(get_
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            details=f"Failed to fetch processed sales. Error: {str(e)}"
+            detail=f"Failed to fetch processed sales. Error: {str(e)}"
         )
-        
