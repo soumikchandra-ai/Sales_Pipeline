@@ -13,19 +13,20 @@ st.set_page_config(
 )
 
 def init_session_state():
-    if "token" not in st.session_state:
-        st.session_state["token"]=None
-    if "username" not in st.session_state:
-        st.session_state["username"]=None
-    if "role" not in st.session_state:
-        st.session_state["role"]=None
+    defaults={
+        "token":None,
+        "username":None,
+        "role":None
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key]=value
         
 init_session_state()
 
 def logout():
-    st.session_state["token"]=None
-    st.session_state["username"]=None
-    st.session_state["role"]=None
+    for key in ["token","username","role"]:
+        st.session_state[key]=None
     st.rerun()
     
 if st.session_state["token"] is None:
@@ -45,11 +46,32 @@ else:
             nav_options=["Dashboard","Upload","Pipeline"]
         else:
             nav_options=["Dashboard"]
+            
         page = st.radio(
             "Go to:",
             options=nav_options,
             label_visibility="collapsed"
         )
+        
+        st.markdown("<br>"*8,unsafe_allow_html=True)
+        
+        st.markdown("---")
+        st.markdown("**Logged in as:**")
+
+        role = st.session_state.get("role","viewer")
+        username = st.session_state.get("username","")
+        
+        if role == "admin":
+            st.markdown(
+                f" **{username}** \n"
+                f"`ADMIN`"
+            )
+        else:
+            st.markdown(
+                f" **{username}** \n"
+                f"`VIEWER`"
+            )
+            
         st.markdown("---")
         
         if st.button("Logout ",use_container_width=True):

@@ -385,3 +385,21 @@ def get_processed_sales(current_user:User=require_viewer,db:Session=Depends(get_
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch processed sales. Error: {str(e)}"
         )
+        
+@app.post("/pipeline/run",tags=["Pipeline"])
+def run_pipeline(current_user: User=require_admin):
+    "Triggers the ETL Pipelinne to proocess all pending raw sales."
+    from backend.database import SessionLocal
+    db = SessionLocal()
+    
+    try:
+        pending_count = db.query(RawSale).filter(RawSale.status=="pending").count()
+        return {
+            "message":"Pipeline triggered successfully.",
+            "status":"stub",
+            "pending_records_found":pending_count,
+            "processed":0,
+            "triggered_by":current_user.username
+        }
+    finally:
+        db.close()
