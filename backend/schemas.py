@@ -87,6 +87,7 @@ class RawSaleResponse(BaseModel):
     price:float
     status:str
     uploaded_by:int
+    fail_reason: Optional[str] = None
     created_at:Optional[datetime]
     
     class Config:

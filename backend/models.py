@@ -5,7 +5,8 @@ from sqlalchemy import (
     String,
     Float,
     DateTime,
-    ForeignKey
+    ForeignKey,
+    Text
 )
 from sqlalchemy.orm import relationship
 from backend.database import Base
@@ -35,6 +36,7 @@ class RawSale(Base):
     price = Column(Float, nullable=False)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     status = Column(String(20), default="pending")
+    fail_reason = Column(Text, nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
     
     uploader = relationship("User", back_populates="sales")

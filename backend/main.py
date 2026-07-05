@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from datetime import timedelta,datetime
 from backend.models import User,RawSale,ProcessedSale
 from backend.schemas import UserRegisterSchema, UserLoginSchema, TokenResponseSchema, UserResponseSchema, RawSaleCreate, RawSaleResponse, ProccessedSaleResponse, CSVUploadResponse
+from backend.pipeline import run_cleaning_pipeline
 from backend.auth import hash_password, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user, require_role, require_admin, require_viewer
 
 app=FastAPI(
@@ -387,19 +388,20 @@ def get_processed_sales(current_user:User=require_viewer,db:Session=Depends(get_
         )
         
 @app.post("/pipeline/run",tags=["Pipeline"])
-def run_pipeline(current_user: User=require_admin):
+def run_pipeline(current_user: User=require_admin, db: Session=Depends(get_db)):
     "Triggers the ETL Pipelinne to proocess all pending raw sales."
-    from backend.database import SessionLocal
-    db = SessionLocal()
-    
     try:
-        pending_count = db.query(RawSale).filter(RawSale.status=="pending").count()
+        results = run_cleaning_pipeline(db)
         return {
-            "message":"Pipeline triggered successfully.",
-            "status":"stub",
-            "pending_records_found":pending_count,
-            "processed":0,
-            "triggered_by":current_user.username
+            "message":"Pipeline cleaning step completed.",
+            "triggered_by":current_user.username,
+            "total_pending":results["total_pending"],
+            "passed":results["passed"],
+            "failed":results["failed"],
+            "note":("CLean records are ready for transform or load.")
         }
-    finally:
-        db.close()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Pipeline failed with error: {str(e)}"
+        )

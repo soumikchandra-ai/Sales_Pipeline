@@ -1,0 +1,49 @@
+2026-07-05 11:34:09 | INFO     | Pipeline started at 2026-07-05 06:04:09 UTC
+2026-07-05 11:34:09 | INFO     | ============================================================
+2026-07-05 11:34:09 | INFO     | PIPELINE RUN STARTED
+2026-07-05 11:34:09 | INFO     | ============================================================
+2026-07-05 11:34:09 | INFO     | Loading pending records from database...
+2026-07-05 11:34:09 | INFO     | Loaded 8 pending records from DB
+2026-07-05 11:34:09 | DEBUG    | Columns: ['id', 'date', 'product', 'category', 'qty', 'price', 'uploaded_by', 'status', 'created_at']
+2026-07-05 11:34:09 | INFO     | Starting validation pipeline...
+2026-07-05 11:34:09 | INFO     | Checking for null values...
+2026-07-05 11:34:09 | WARNING  | Found 2 rows with null values:
+2026-07-05 11:34:09 | WARNING  |   Row ID 12: null_value: [product] is null/missing
+2026-07-05 11:34:09 | WARNING  |   Row ID 13: null_value: [category] is null/missing
+2026-07-05 11:34:09 | INFO     | After null check → clean: 6, failed: 2
+2026-07-05 11:34:09 | INFO     | Validating and coercing data types...
+2026-07-05 11:34:09 | DEBUG    | Parsing date column...
+2026-07-05 11:34:09 | DEBUG    | Validating qty column...
+2026-07-05 11:34:09 | DEBUG    | Validating price column...
+2026-07-05 11:34:09 | DEBUG    | Stripping whitespace from product and category...
+2026-07-05 11:34:09 | WARNING  | Found 3 rows with type errors:
+2026-07-05 11:34:09 | WARNING  | Row ID 14: type_error: qty='-5' is invalid (qty must be positive, got -5)
+2026-07-05 11:34:09 | WARNING  | Row ID 15: type_error: price='0.0' is invalid (price must be positive, got 0.0)
+2026-07-05 11:34:09 | WARNING  | Row ID 16: type_error: price='-200.0' is invalid (price must be positive, got -200.0)
+2026-07-05 11:34:09 | INFO     | After type check → clean: 3, failed: 3
+2026-07-05 11:34:09 | INFO     | Checking for duplicates against processed_sales...
+2026-07-05 11:34:09 | INFO     | No existing processed records — no duplicates possible
+2026-07-05 11:34:09 | INFO     | Standardizing data formatting...
+2026-07-05 11:34:09 | INFO     | Standardized 3 records
+2026-07-05 11:34:09 | DEBUG    | Sample after standardization:
+            product     category    price
+0  Basmati Rice 5Kg    Groceries    250.0
+1        Samsung Tv  Electronics  32000.0
+2      Toor Dal 1Kg    Groceries    141.0
+2026-07-05 11:34:09 | INFO     | ============================================================
+2026-07-05 11:34:09 | INFO     | VALIDATION SUMMARY
+2026-07-05 11:34:09 | INFO     | Total input records: 8
+2026-07-05 11:34:09 | INFO     | Passed (clean): 3
+2026-07-05 11:34:09 | INFO     | Failed: 5
+2026-07-05 11:34:09 | INFO     | Failure breakdown:
+2026-07-05 11:34:09 | INFO     |     type_error: 3 record(s)
+2026-07-05 11:34:09 | INFO     |     null_value: 2 record(s)
+2026-07-05 11:34:09 | INFO     | ============================================================
+2026-07-05 11:34:09 | INFO     | Writing 5 failed records back to DB...
+2026-07-05 11:34:09 | DEBUG    | Marked ID 12 as failed: null_value: [product] is null/missing
+2026-07-05 11:34:09 | DEBUG    | Marked ID 13 as failed: null_value: [category] is null/missing
+2026-07-05 11:34:09 | DEBUG    | Marked ID 14 as failed: type_error: qty='-5' is invalid (qty must be positive, got -5)
+2026-07-05 11:34:09 | DEBUG    | Marked ID 15 as failed: type_error: price='0.0' is invalid (price must be positive, got 0.0)
+2026-07-05 11:34:09 | DEBUG    | Marked ID 16 as failed: type_error: price='-200.0' is invalid (price must be positive, got -200.0)
+2026-07-05 11:34:09 | INFO     | Successfully marked 5 records as failed in DB
+2026-07-05 11:34:09 | INFO     | Pipeline finished in 0.09s — 3 clean, 5 failed
