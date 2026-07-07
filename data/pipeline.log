@@ -47,3 +47,65 @@
 2026-07-05 11:34:09 | DEBUG    | Marked ID 16 as failed: type_error: price='-200.0' is invalid (price must be positive, got -200.0)
 2026-07-05 11:34:09 | INFO     | Successfully marked 5 records as failed in DB
 2026-07-05 11:34:09 | INFO     | Pipeline finished in 0.09s — 3 clean, 5 failed
+2026-07-06 11:37:32 | INFO     | Pipeline triggered by user: peterparker (role: admin)
+2026-07-06 11:37:32 | INFO     | ============================================================
+2026-07-06 11:37:32 | INFO     | PIPELINE RUN STARTED
+2026-07-06 11:37:32 | INFO     | TAX_RATE = 18.0
+2026-07-06 11:37:32 | INFO     | DISCOUNT_RATE = 5.0
+2026-07-06 11:37:32 | INFO     | ============================================================
+2026-07-06 11:37:32 | INFO     | Loading pending records from database...
+2026-07-06 11:37:32 | INFO     | Loaded 16 pending records from DB
+2026-07-06 11:37:32 | DEBUG    | Columns: ['id', 'date', 'product', 'category', 'qty', 'price', 'uploaded_by', 'status', 'created_at']
+2026-07-06 11:37:32 | INFO     | Starting validation pipeline...
+2026-07-06 11:37:32 | INFO     | Checking for null values...
+2026-07-06 11:37:32 | INFO     | No null values found
+2026-07-06 11:37:32 | INFO     | After null check → clean: 16, failed: 0
+2026-07-06 11:37:32 | INFO     | Validating and coercing data types...
+2026-07-06 11:37:32 | DEBUG    | Parsing date column...
+2026-07-06 11:37:32 | DEBUG    | Validating qty column...
+2026-07-06 11:37:32 | DEBUG    | Validating price column...
+2026-07-06 11:37:32 | DEBUG    | Stripping whitespace from product and category...
+2026-07-06 11:37:32 | INFO     | After type check → clean: 16, failed: 0
+2026-07-06 11:37:32 | INFO     | Checking for duplicates against processed_sales...
+2026-07-06 11:37:32 | INFO     | No existing processed records — no duplicates possible
+2026-07-06 11:37:32 | INFO     | Standardizing data formatting...
+2026-07-06 11:37:32 | INFO     | Standardized 16 records
+2026-07-06 11:37:32 | DEBUG    | Sample after standardization:
+            product     category    price
+0  Basmati Rice 5Kg    Groceries    250.0
+1        Samsung Tv  Electronics  32000.0
+2      Toor Dal 1Kg    Groceries    141.0
+2026-07-06 11:37:32 | INFO     | ============================================================
+2026-07-06 11:37:32 | INFO     | VALIDATION SUMMARY
+2026-07-06 11:37:32 | INFO     | Total input records: 16
+2026-07-06 11:37:32 | INFO     | Passed (clean): 16
+2026-07-06 11:37:32 | INFO     | Failed: 0
+2026-07-06 11:37:32 | INFO     | ============================================================
+2026-07-06 11:37:32 | INFO     | No failed records to update in DB
+2026-07-06 11:37:32 | INFO     | Calculating financials...
+2026-07-06 11:37:32 | INFO     | Applying TAX_RATE=18.0%, DISCOUNT_RATE=5.0%
+2026-07-06 11:37:32 | DEBUG    | Sample calculation:
+            product  qty  ...  discount  final_amount
+0  Basmati Rice 5Kg   10  ...    125.00       2825.00
+1        Samsung Tv    2  ...   3200.00      72320.00
+2      Toor Dal 1Kg    5  ...     35.25        796.65
+
+[3 rows x 7 columns]
+2026-07-06 11:37:32 | INFO     | Records calculated : 16
+2026-07-06 11:37:32 | INFO     | Total revenue : Rs.87,289.11
+2026-07-06 11:37:32 | INFO     | Total tax collected: Rs.13,904.46
+2026-07-06 11:37:32 | INFO     | Total discount : Rs.3,862.35
+2026-07-06 11:37:32 | INFO     | Writing to processed_sales...
+2026-07-06 11:37:32 | INFO     | Successfully wrote 16 records to processed_sales
+2026-07-06 11:37:32 | INFO     | Updated 16 raw_sales records to status='processed'
+2026-07-06 11:37:32 | INFO     | ============================================================
+2026-07-06 11:37:32 | INFO     | PIPELINE COMPLETE — FINAL SUMMARY
+2026-07-06 11:37:32 | INFO     | Duration : 0.16 seconds
+2026-07-06 11:37:32 | INFO     | Total loaded : 16
+2026-07-06 11:37:32 | INFO     | Successfully processed: 16
+2026-07-06 11:37:32 | INFO     | Failed : 0
+2026-07-06 11:37:32 | INFO     | of which duplicates: 0
+2026-07-06 11:37:32 | INFO     | Total revenue : Rs.87,289.11
+2026-07-06 11:37:32 | INFO     | Tax collected : Rs.13,904.46
+2026-07-06 11:37:32 | INFO     | Discount given : Rs. 3,862.35
+2026-07-06 11:37:32 | INFO     | ============================================================

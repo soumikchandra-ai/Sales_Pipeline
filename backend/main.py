@@ -4,11 +4,12 @@ from typing import Optional, List
 from backend.database import engine,Base, get_db
 import backend.models
 import pandas as pd
+from sqlalchemy import func, cast, Date
 from sqlalchemy.orm import Session
-from datetime import timedelta,datetime
+from datetime import timedelta,datetime, date as date_type
 from backend.models import User,RawSale,ProcessedSale
 from backend.schemas import UserRegisterSchema, UserLoginSchema, TokenResponseSchema, UserResponseSchema, RawSaleCreate, RawSaleResponse, ProccessedSaleResponse, CSVUploadResponse
-from backend.pipeline import run_cleaning_pipeline
+from backend.pipeline import run_pipeline
 from backend.auth import hash_password, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user, require_role, require_admin, require_viewer
 
 app=FastAPI(
@@ -388,20 +389,137 @@ def get_processed_sales(current_user:User=require_viewer,db:Session=Depends(get_
         )
         
 @app.post("/pipeline/run",tags=["Pipeline"])
-def run_pipeline(current_user: User=require_admin, db: Session=Depends(get_db)):
-    "Triggers the ETL Pipelinne to proocess all pending raw sales."
+def trigger_pipeline(
+    current_user: User = require_admin,
+    db: Session = Depends(get_db)
+):
     try:
-        results = run_cleaning_pipeline(db)
+        logger.info(
+            f"Pipeline triggered by user: {current_user.username} "
+            f"(role: {current_user.role})"
+        )
+
+        summary = run_pipeline(db)
+        
         return {
-            "message":"Pipeline cleaning step completed.",
-            "triggered_by":current_user.username,
-            "total_pending":results["total_pending"],
-            "passed":results["passed"],
-            "failed":results["failed"],
-            "note":("CLean records are ready for transform or load.")
+            "triggered_by" : current_user.username,
+            "total_loaded" : summary["total_loaded"],
+            "processed" : summary["processed"],
+            "failed" : summary["failed"],
+            "skipped_duplicates" : summary["skipped_duplicates"],
+            "tax_collected" : summary["tax_collected"],
+            "total_revenue" : summary["total_revenue"],
+            "message" : summary["message"]
         }
+
+    except Exception as e:
+        logger.error(f"Pipeline crashed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Pipeline failed: {str(e)}"
+        )
+import logging
+logger = logging.getLogger("pipeline")
+
+@app.get("/dashboard/summary", tags=["Dashboard"])
+def get_dashboard_summary(
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns KPI summary metrics from processed_sales.
+    """
+    try:
+        result = db.query(
+            func.sum(ProcessedSale.final_amount).label("total_revenue"),
+            func.sum(ProcessedSale.tax).label("total_tax"),
+            func.count(ProcessedSale.id).label("total_orders"),
+            func.avg(ProcessedSale.final_amount).label("avg_order_value"),
+            func.max(ProcessedSale.processed_at).label("last_updated")
+        ).first()
+
+        return {
+            "total_revenue": round(float(result.total_revenue or 0), 2),
+            "total_tax": round(float(result.total_tax or 0), 2),
+            "total_orders": int(result.total_orders or 0),
+            "avg_order_value": round(float(result.avg_order_value or 0), 2),
+            "last_updated": (
+                result.last_updated.isoformat()
+                if result.last_updated
+                else None
+            )
+        }
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Pipeline failed with error: {str(e)}"
+            detail=f"Failed to fetch dashboard summary: {str(e)}"
+        )
+
+
+@app.get("/dashboard/revenue-trend", tags=["Dashboard"])
+def get_revenue_trend(
+    start_date: str | None = Query(default=None, alias="start_date"),
+    end_date: str | None   = Query(default=None, alias="end_date"),
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    try:
+        from datetime import timedelta
+
+        sale_date_expr = func.date(RawSale.date).label("sale_date")
+
+        query = db.query(
+            sale_date_expr,
+            func.sum(ProcessedSale.final_amount).label("revenue"),
+            func.count(ProcessedSale.id).label("order_count")
+        ).join(
+            RawSale,
+            ProcessedSale.raw_id == RawSale.id
+        ).group_by(sale_date_expr)
+
+        if start_date:
+            start_date_clean = start_date.strip().split("T")[0].split(" ")[0]
+            start_dt = datetime.strptime(start_date_clean, "%Y-%m-%d")
+            query = query.filter(RawSale.date >= start_dt)
+
+        if end_date:
+            end_date_clean = end_date.strip().split("T")[0].split(" ")[0]
+            end_dt = datetime.strptime(end_date_clean, "%Y-%m-%d")
+            end_dt_inclusive = end_dt + timedelta(days=1)
+            query = query.filter(RawSale.date < end_dt_inclusive)
+
+        results = query.order_by(sale_date_expr).all()
+        trend_data = []
+        for row in results:
+        
+            sale_date_val = row.sale_date
+
+            if sale_date_val is None:
+                continue
+            
+
+            if isinstance(sale_date_val, str):
+                date_str = sale_date_val.split("T")[0].split(" ")[0]
+
+            elif hasattr(sale_date_val, "strftime"):
+                date_str = sale_date_val.strftime("%Y-%m-%d")
+
+            else:
+                date_str = str(sale_date_val).split("T")[0].split(" ")[0]
+
+            trend_data.append({
+                "date"       : date_str,
+                "revenue"    : round(float(row.revenue or 0), 2),
+                "order_count": int(row.order_count or 0)
+            })
+
+        return trend_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch revenue trend: {str(e)}"
         )

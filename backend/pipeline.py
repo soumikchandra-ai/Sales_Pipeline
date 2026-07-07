@@ -6,6 +6,9 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from backend.models import RawSale, ProcessedSale
 
+TAX_RATE = float(os.getenv("TAX_RATE","0.18"))
+DISCOUNT_RATE = float(os.getenv("DISCOUNT_RATE","0.05"))
+
 logger = logging.getLogger("pipeline")
 logger.setLevel(logging.DEBUG)
 
@@ -39,6 +42,8 @@ def load_pending_records(db: Session) -> pd.DataFrame:
     """
     logger.info("=" * 60)
     logger.info("PIPELINE RUN STARTED")
+    logger.info(f"TAX_RATE = {TAX_RATE*100:.1f}")
+    logger.info(f"DISCOUNT_RATE = {DISCOUNT_RATE*100:.1f}")
     logger.info("=" * 60)
     logger.info("Loading pending records from database...")
 
@@ -82,9 +87,7 @@ def check_nulls(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     CRITICAL_COLUMNS = ["date", "product", "category", "qty", "price"]
 
     null_mask = df[CRITICAL_COLUMNS].isnull().any(axis=1)
-
     failed_df = df[null_mask].copy()
-
     clean_df = df[~null_mask].copy()
 
     if len(failed_df) > 0:
@@ -400,43 +403,226 @@ def update_failed_records(failed_df: pd.DataFrame, db: Session) -> int:
 
 
 
-def run_cleaning_pipeline(db: Session) -> dict:
+def calculate_financials(clean_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Full pipeline orchestrator — the main function called by the API.
+    Applies financial calculations to every clean row.
     """
-    start_time = datetime.now(timezone.utc)
-    logger.info(f"Pipeline started at {start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    logger.info("Calculating financials...")
+    logger.info(f"Applying TAX_RATE={TAX_RATE*100:.1f}%, "
+                f"DISCOUNT_RATE={DISCOUNT_RATE*100:.1f}%")
+
+    if clean_df.empty:
+        logger.info("No records to calculate")
+        return clean_df
+
+    df = clean_df.copy()
+    df["total"] = df["qty"] * df["price"]
+    df["tax"] = df["total"] * TAX_RATE
+    df["discount"] = df["total"] * DISCOUNT_RATE
+    df["final_amount"] = df["total"] + df["tax"] - df["discount"]
+    
+    for col in ["total", "tax", "discount", "final_amount"]:
+        df[col] = df[col].round(2)
+    
+    logger.debug(
+        f"Sample calculation:\n"
+        f"{df[['product', 'qty', 'price', 'total', 'tax', 'discount', 'final_amount']].head(3)}"
+    )
+
+    total_revenue = df["final_amount"].sum().round(2)
+    total_tax = df["tax"].sum().round(2)
+    total_discount= df["discount"].sum().round(2)
+
+    logger.info(f"Records calculated : {len(df)}")
+    logger.info(f"Total revenue : Rs.{total_revenue:,.2f}")
+    logger.info(f"Total tax collected: Rs.{total_tax:,.2f}")
+    logger.info(f"Total discount : Rs.{total_discount:,.2f}")
+
+    return df
+
+def write_to_processed(
+    clean_df: pd.DataFrame,
+    db: Session
+) -> Tuple[int, int]:
+    """
+    Bulk inserts calculated records into processed_sales and
+    updates the corresponding raw_sales status to 'processed'.
+    """
+    logger.info("Writing to processed_sales...")
+
+    if clean_df.empty:
+        logger.info("No records to write")
+        return 0, 0
+
+    processed_objects = []
+    now = datetime.now(timezone.utc)
+    
+    for _, row in clean_df.iterrows():
+        try:
+            ps = ProcessedSale(
+                raw_id = int(row["id"]),
+                total = float(row["total"]),
+                tax = float(row["tax"]),
+                discount = float(row["discount"]),
+                final_amount = float(row["final_amount"]),
+                processed_at = now
+            )
+            processed_objects.append(ps)
+
+        except Exception as e:
+            logger.error(
+                f"Failed to build ProcessedSale for raw_id={row.get('id')}: {e}"
+            )
+
+    if not processed_objects:
+        logger.error("No ProcessedSale objects built — nothing to insert")
+        return 0, len(clean_df)
+
+    raw_ids_to_update = [ps.raw_id for ps in processed_objects]
+    
+    try:
+        db.add_all(processed_objects)
+
+        db.flush()
+
+        updated_count = 0
+        for raw_id in raw_ids_to_update:
+            raw_record = db.query(RawSale).filter(
+                RawSale.id == raw_id
+            ).first()
+
+            if raw_record:
+                raw_record.status = "processed"
+                updated_count += 1
+
+        db.commit()
+
+        logger.info(
+            f"Successfully wrote {len(processed_objects)} records "
+            f"to processed_sales"
+        )
+        logger.info(
+            f"Updated {updated_count} raw_sales records "
+            f"to status='processed'"
+        )
+
+        return len(processed_objects), 0
+
+    except Exception as e:
+        db.rollback()
+
+        logger.error(f"TRANSACTION FAILED — rolling back: {e}")
+        logger.error(
+            f"{len(processed_objects)} records were NOT written. "
+            f"raw_sales status NOT updated."
+        )
+
+        try:
+            for raw_id in raw_ids_to_update:
+                raw_record = db.query(RawSale).filter(
+                    RawSale.id == raw_id
+                ).first()
+                if raw_record:
+                    raw_record.status = "failed"
+                    raw_record.fail_reason = (
+                        f"load_error: DB transaction failed — {str(e)}"
+                    )
+            db.commit()
+            logger.info(
+                f"Marked {len(raw_ids_to_update)} records "
+                f"as 'failed' due to transaction error"
+            )
+        except Exception as inner_e:
+            db.rollback()
+            logger.error(
+                f"Could not even mark records as failed: {inner_e}"
+            )
+
+        return 0, len(processed_objects)
+
+
+def run_pipeline(db: Session) -> dict:
+    """
+    The single entry point for the full ETL pipeline.
+    Called by the FastAPI endpoint POST /pipeline/run.
+    """
+    pipeline_start = datetime.now(timezone.utc)
 
     raw_df = load_pending_records(db)
 
     if raw_df.empty:
-        logger.info("Pipeline complete — no records to process")
+        logger.info("Pipeline complete — no pending records found")
+        logger.info("=" * 60)
         return {
-            "total_pending": 0,
-            "passed": 0,
+            "total_loaded": 0,
+            "processed": 0,
             "failed": 0,
-            "clean_df": pd.DataFrame(),
-            "failed_df": pd.DataFrame()
+            "skipped_duplicates": 0,
+            "tax_collected": 0.0,
+            "total_revenue": 0.0,
+            "message": "No pending records found. Nothing to process."
         }
 
-    total_pending = len(raw_df)
+    total_loaded = len(raw_df)
 
     clean_df, failed_df = validate_dataframe(raw_df, db)
 
+    skipped_duplicates = 0
+    if not failed_df.empty and "fail_reason" in failed_df.columns:
+        skipped_duplicates = int(
+            failed_df["fail_reason"].str.startswith("duplicate").sum()
+        )
+
     update_failed_records(failed_df, db)
 
-    end_time = datetime.now(timezone.utc)
-    duration = (end_time - start_time).total_seconds()
+    if clean_df.empty:
+        logger.info("No clean records to transform — pipeline stopping")
+        logger.info("=" * 60)
+        return {
+            "total_loaded": total_loaded,
+            "processed": 0,
+            "failed": len(failed_df),
+            "skipped_duplicates": skipped_duplicates,
+            "tax_collected": 0.0,
+            "total_revenue": 0.0,
+            "message": "All records failed validation. Check fail reasons."
+        }
 
+    calculated_df = calculate_financials(clean_df)
+
+    tax_collected = round(float(calculated_df["tax"].sum()), 2)
+    total_revenue = round(float(calculated_df["final_amount"].sum()), 2)
+
+    written, write_failed = write_to_processed(calculated_df, db)
+
+    total_failed = len(failed_df) + write_failed
+
+    pipeline_end = datetime.now(timezone.utc)
+    duration_seconds = (pipeline_end - pipeline_start).total_seconds()
+
+    logger.info("=" * 60)
+    logger.info("PIPELINE COMPLETE — FINAL SUMMARY")
+    logger.info(f"Duration : {duration_seconds:.2f} seconds")
+    logger.info(f"Total loaded : {total_loaded}")
+    logger.info(f"Successfully processed: {written}")
+    logger.info(f"Failed : {total_failed}")
+    logger.info(f"of which duplicates: {skipped_duplicates}")
+    logger.info(f"Total revenue : Rs.{total_revenue:,.2f}")
+    logger.info(f"Tax collected : Rs.{tax_collected:,.2f}")
     logger.info(
-        f"Pipeline finished in {duration:.2f}s — "
-        f"{len(clean_df)} clean, {len(failed_df)} failed"
+        f"Discount given : Rs. {round(float(calculated_df['discount'].sum()), 2):,.2f}"
     )
+    logger.info("=" * 60)
 
     return {
-        "total_pending": total_pending,
-        "passed": len(clean_df),
-        "failed": len(failed_df),
-        "clean_df": clean_df,
-        "failed_df": failed_df
+        "total_loaded": total_loaded,
+        "processed": written,
+        "failed": total_failed,
+        "skipped_duplicates": skipped_duplicates,
+        "tax_collected": tax_collected,
+        "total_revenue": total_revenue,
+        "message": (
+            f"Pipeline complete. {written} records processed, "
+            f"{total_failed} failed."
+        )
     }
