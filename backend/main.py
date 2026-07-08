@@ -523,3 +523,99 @@ def get_revenue_trend(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch revenue trend: {str(e)}"
         )
+ 
+@app.get("/dashboard/top-products", tags=["Dashboard"])
+def get_top_products(
+    limit: int = Query(
+        default=10,
+        ge=1,
+        le=50,
+        description="Number of top products to return (default 10, max 50)"
+    ),
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns top N products ranked by total revenue.
+    """
+    try:
+        results = db.query(
+            RawSale.product.label("product"),
+            RawSale.category.label("category"),
+            func.sum(ProcessedSale.final_amount).label("revenue"),
+            func.sum(RawSale.qty).label("units_sold")
+        ).join(
+            RawSale,
+            ProcessedSale.raw_id == RawSale.id
+        ).group_by(
+            RawSale.product,
+            RawSale.category
+        ).order_by(
+            func.sum(ProcessedSale.final_amount).desc()
+        ).limit(limit).all()
+        return [
+            {
+                "product" : row.product or "Unknown",    
+                "category" : row.category or "Uncategorized",
+                "revenue" : round(float(row.revenue or 0), 2),
+                "units_sold" : int(row.units_sold or 0)
+            }
+            for row in results
+        ]
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch top products: {str(e)}"
+        )
+
+
+@app.get("/dashboard/category-breakdown", tags=["Dashboard"])
+def get_category_breakdown(
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns revenue breakdown by product category with percentages.
+    """
+    try:
+        results = db.query(
+            RawSale.category.label("category"),
+            func.sum(ProcessedSale.final_amount).label("revenue"),
+            func.count(ProcessedSale.id).label("order_count")
+        ).join(
+            RawSale,
+            ProcessedSale.raw_id == RawSale.id
+        ).group_by(
+            RawSale.category
+        ).order_by(
+            func.sum(ProcessedSale.final_amount).desc()
+        ).all()
+
+        if not results:
+            return []
+        total_revenue = sum(
+            float(row.revenue or 0) for row in results
+        )        
+        breakdown = []
+        for row in results:
+            revenue = round(float(row.revenue or 0), 2)
+            if total_revenue > 0:
+                percentage = round((revenue / total_revenue) * 100, 2)                
+            else:
+                percentage = 0.0
+
+            breakdown.append({
+                "category" : row.category or "Uncategorized",
+                "revenue" : revenue,
+                "order_count": int(row.order_count or 0),
+                "percentage" : percentage
+            })
+
+        return breakdown
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch category breakdown: {str(e)}"
+        )

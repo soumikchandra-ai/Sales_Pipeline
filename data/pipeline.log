@@ -109,3 +109,65 @@
 2026-07-06 11:37:32 | INFO     | Tax collected : Rs.13,904.46
 2026-07-06 11:37:32 | INFO     | Discount given : Rs. 3,862.35
 2026-07-06 11:37:32 | INFO     | ============================================================
+2026-07-08 12:02:24 | INFO     | Pipeline triggered by user: peterparker (role: admin)
+2026-07-08 12:02:25 | INFO     | ============================================================
+2026-07-08 12:02:25 | INFO     | PIPELINE RUN STARTED
+2026-07-08 12:02:25 | INFO     | TAX_RATE = 18.0
+2026-07-08 12:02:25 | INFO     | DISCOUNT_RATE = 5.0
+2026-07-08 12:02:25 | INFO     | ============================================================
+2026-07-08 12:02:25 | INFO     | Loading pending records from database...
+2026-07-08 12:02:25 | INFO     | Loaded 45 pending records from DB
+2026-07-08 12:02:25 | DEBUG    | Columns: ['id', 'date', 'product', 'category', 'qty', 'price', 'uploaded_by', 'status', 'created_at']
+2026-07-08 12:02:25 | INFO     | Starting validation pipeline...
+2026-07-08 12:02:25 | INFO     | Checking for null values...
+2026-07-08 12:02:25 | INFO     | No null values found
+2026-07-08 12:02:25 | INFO     | After null check → clean: 45, failed: 0
+2026-07-08 12:02:25 | INFO     | Validating and coercing data types...
+2026-07-08 12:02:25 | DEBUG    | Parsing date column...
+2026-07-08 12:02:25 | DEBUG    | Validating qty column...
+2026-07-08 12:02:25 | DEBUG    | Validating price column...
+2026-07-08 12:02:25 | DEBUG    | Stripping whitespace from product and category...
+2026-07-08 12:02:25 | INFO     | After type check → clean: 45, failed: 0
+2026-07-08 12:02:25 | INFO     | Checking for duplicates against processed_sales...
+2026-07-08 12:02:25 | DEBUG    | Built 16 fingerprints from existing processed records
+2026-07-08 12:02:25 | INFO     | No duplicates found
+2026-07-08 12:02:25 | INFO     | After duplicate check -> clean: 45, failed: 0
+2026-07-08 12:02:25 | INFO     | Standardizing data formatting...
+2026-07-08 12:02:25 | INFO     | Standardized 45 records
+2026-07-08 12:02:25 | DEBUG    | Sample after standardization:
+                product     category   price
+0    Organic Honey 500G    Groceries   320.0
+1       Laptop Backpack  Accessories  1499.0
+2  Electric Kettle 1.5L      Kitchen  1799.0
+2026-07-08 12:02:25 | INFO     | ============================================================
+2026-07-08 12:02:25 | INFO     | VALIDATION SUMMARY
+2026-07-08 12:02:25 | INFO     | Total input records: 45
+2026-07-08 12:02:25 | INFO     | Passed (clean): 45
+2026-07-08 12:02:25 | INFO     | Failed: 0
+2026-07-08 12:02:25 | INFO     | ============================================================
+2026-07-08 12:02:25 | INFO     | No failed records to update in DB
+2026-07-08 12:02:25 | INFO     | Calculating financials...
+2026-07-08 12:02:25 | INFO     | Applying TAX_RATE=18.0%, DISCOUNT_RATE=5.0%
+2026-07-08 12:02:25 | DEBUG    | Sample calculation:
+                product  qty   price   total      tax  discount  final_amount
+0    Organic Honey 500G   12   320.0  3840.0   691.20    192.00       4339.20
+1       Laptop Backpack    6  1499.0  8994.0  1618.92    449.70      10163.22
+2  Electric Kettle 1.5L    5  1799.0  8995.0  1619.10    449.75      10164.35
+2026-07-08 12:02:25 | INFO     | Records calculated : 45
+2026-07-08 12:02:25 | INFO     | Total revenue : Rs.841,975.43
+2026-07-08 12:02:25 | INFO     | Total tax collected: Rs.134,119.98
+2026-07-08 12:02:25 | INFO     | Total discount : Rs.37,255.55
+2026-07-08 12:02:25 | INFO     | Writing to processed_sales...
+2026-07-08 12:02:25 | INFO     | Successfully wrote 45 records to processed_sales
+2026-07-08 12:02:25 | INFO     | Updated 45 raw_sales records to status='processed'
+2026-07-08 12:02:25 | INFO     | ============================================================
+2026-07-08 12:02:25 | INFO     | PIPELINE COMPLETE — FINAL SUMMARY
+2026-07-08 12:02:25 | INFO     | Duration : 0.28 seconds
+2026-07-08 12:02:25 | INFO     | Total loaded : 45
+2026-07-08 12:02:25 | INFO     | Successfully processed: 45
+2026-07-08 12:02:25 | INFO     | Failed : 0
+2026-07-08 12:02:25 | INFO     | of which duplicates: 0
+2026-07-08 12:02:25 | INFO     | Total revenue : Rs.841,975.43
+2026-07-08 12:02:25 | INFO     | Tax collected : Rs.134,119.98
+2026-07-08 12:02:25 | INFO     | Discount given : Rs. 37,255.55
+2026-07-08 12:02:25 | INFO     | ============================================================
