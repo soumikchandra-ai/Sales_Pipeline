@@ -1,88 +1,94 @@
-import os
 import sys
+import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import streamlit as st
 import pandas as pd
-from datetime import datetime,date
+from datetime import date, datetime
 from frontend.api_client import api_post, api_get
 
 CATEGORIES = [
-    "Groceries",
-    "Electronics",
-    "Clothing",
-    "Kitchen",
-    "Stationery",
-    "Home & Living",
-    "Spices",
-    "Beverages",
-    "Personal Care",
-    "Sports & Fitness",
-    "Other"
+    "Groceries", "Electronics", "Clothing", "Kitchen",
+    "Stationery", "Home & Living", "Spices", "Beverages",
+    "Personal Care", "Sports & Fitness", "Other"
 ]
 
-def show_upload_page():
-    "Renders the full upload page."
-    if st.session_state.get("role")!="admin":
-        st.error("You do not have permission to access this page.")
-        st.stop()
-        
-    st.title("Upload Sales Data")
-    st.markdown("Use this page to add sales record to the pipeline")
-    
-    st.markdown("---")
-    
-    st.header("Upload CSV File")
-    
-    with st.expander("Required CSV Format- click to expand",expanded=True):
-        st.markdown("""
-                   Your CSV file must contain these **exact column names**:
 
-                    | Column     | Type    | Example          | Rules              |
-                    |------------|---------|------------------|--------------------|
-                    | `date`     | Date    | `2024-01-15`     | Cannot be future   |
-                    | `product`  | Text    | `Basmati Rice 5kg` | Required, non-empty |
-                    | `category` | Text    | `Groceries`      | Required, non-empty |
-                    | `qty`      | Integer | `10`             | Must be > 0        |
-                    | `price`    | Float   | `250.00`         | Must be > 0        |
-                   """)
-    st.markdown(" ")
-    
+def show_upload_page():
+    """Renders the Upload Sales Data page. Admin only."""
+    if st.session_state.get("role") != "admin":
+        st.warning("You do not have permission to access this page.")
+        st.stop()
+
+    st.title("Upload Sales Data")
+    st.caption("Add sales records to the pipeline via CSV upload or manual entry.")
+    st.divider()
+
+    st.header("Upload CSV File")
+
+    with st.expander("Required CSV Format", expanded=True):
+        st.markdown("""
+        Your CSV must contain these **exact column names**:
+
+        | Column | Type | Example | Rules |
+        |---|---|---|---|
+        | `date` | Date | `2024-01-15` | Cannot be future |
+        | `product` | Text | `Basmati Rice 5kg` | Non-empty |
+        | `category` | Text | `Groceries` | Non-empty |
+        | `qty` | Integer | `10` | Must be > 0 |
+        | `price` | Float | `250.00` | Must be > 0 |
+
+        Extra columns are ignored.
+        Rows with invalid values are skipped and counted.
+        """)
+
     uploaded_file = st.file_uploader(
-        "Choose a CSV FIle to upload",
+        "Choose a CSV file",
         type=["csv"],
-        help="Upload a .csv file with sales data. Max Size: 200MB",
+        help="Upload a .csv file with sales data",
         key="csv_file_uploader"
     )
-    
+
     if uploaded_file is not None:
         try:
             preview_df = pd.read_csv(uploaded_file)
-        except Exception as e:
-            st.error(f"Could not read the CSV file: {str(e)}. Please make sure it's a valid CSV file.")
-            st.stop()
+            total_rows = len(preview_df)
 
-        total_rows = len(preview_df)
-        st.markdown(f"**File:** {uploaded_file.name} - **{total_rows}** rows found")
-        st.subheader("Preview (first 5 rows):")
-        st.dataframe(preview_df.head(5),use_container_width=True)
+            st.markdown(
+                f"**File:** `{uploaded_file.name}` — "
+                f"**{total_rows} rows**, "
+                f"**{len(preview_df.columns)} columns**"
+            )
 
-        required_cols = {"date","product","category","qty","price"}
-        actual_cols = set(preview_df.columns.str.strip().str.lower())
-        missing_cols = required_cols - actual_cols
+            required_cols = {"date", "product", "category", "qty", "price"}
+            actual_cols   = set(preview_df.columns.str.strip().str.lower())
+            missing_cols  = required_cols - actual_cols
 
-        if missing_cols:
-            st.error(f"This CSV File has missing columns {missing_cols}")
-        else:
-            st.success("All required columns found")
+            if missing_cols:
+                st.error(
+                    f"Missing required columns: **{sorted(missing_cols)}**. "
+                    "Fix the file and re-upload."
+                )
+            else:
+                st.success("All required columns found!")
+                st.subheader("Preview (first 5 rows):")
+                st.dataframe(preview_df.head(5), use_container_width=True)
 
-            upload_col,_ = st.columns([1,3])
+                up_col, _ = st.columns([1, 3])
+                with up_col:
+                    upload_clicked = st.button(
+                        "⬆Upload to Database",
+                        type="primary",
+                        use_container_width=True,
+                        key="csv_upload_btn"
+                    )
 
-            with upload_col:
-                upload_clicked = st.button("Upload to database",type="primary",use_container_width=True,key="csv_upload_btn")
+                if upload_clicked:
+                    progress_bar = st.progress(0, text="Preparing upload...")
+                    progress_bar.progress(20, text="Reading file...")
 
-            if upload_clicked:
-                with st.spinner("Uploading to database"):
                     file_bytes = uploaded_file.getvalue()
+                    progress_bar.progress(50, text="Sending to server...")
+
                     success, response_data, status_code = api_post(
                         "/sales/upload-csv",
                         token=st.session_state["token"],
@@ -94,175 +100,211 @@ def show_upload_page():
                             )
                         }
                     )
-                if success:
-                    inserted = response_data.get("inserted",0)
-                    skipped = response_data.get("skipped",0)
 
-                    st.success(f"Upload complete: inserted **{inserted} rows** and skipped **{skipped} rows**")
-                    st.balloons()
-                else:
-                    if status_code == 401:
-                        st.error("Session expired. Please log out and log in again.")
-                    elif status_code == 403:
-                        st.error("Admin access required to upload data.")
-                    elif status_code == 400:
-                        st.error(f"Upload failed: {response_data}")
-                    elif status_code == 0:
-                        st.error(f"Connection error: {response_data}")
+                    progress_bar.progress(90, text="Saving to database...")
+
+                    if success:
+                        progress_bar.progress(100, text="Done!")
+                        inserted = response_data.get("inserted", 0)
+                        skipped  = response_data.get("skipped", 0)
+                        st.success(
+                            f"Upload complete! "
+                            f"**{inserted} rows** inserted, "
+                            f"**{skipped} rows** skipped."
+                        )
+                        st.balloons()
                     else:
-                        st.error(f"Upload failed (status {status_code}): {response_data}")
+                        progress_bar.empty()
+                        if status_code == 401:
+                            st.error("Session expired. Please log out and log in again.")
+                        elif status_code == 403:
+                            st.error("Admin access required.")
+                        elif status_code == 400:
+                            st.error(f"{response_data}")
+                        elif status_code == 0:
+                            st.error(f"Cannot connect to server: {response_data}")
+                        else:
+                            st.error(f"Upload failed: {response_data}")
 
-    st.markdown("---")
-    
-    st.header("Add a Single Sale Manually")
-    st.markdown("Use this form to add one sale record at a time")
-    
-    with st.form("manual_entry_form",clear_on_submit=True):
-        col1,col2 = st.columns(2)
-    
+        except Exception as e:
+            st.error(f"Could not read the CSV file: {str(e)}")
+
+    st.divider()
+
+    st.header("Add Single Sale Manually")
+    st.caption("Enter one sale record at a time using the form below.")
+
+    with st.form("manual_entry_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+
         with col1:
             sale_date = st.date_input(
                 "Sale Date",
                 value=date.today(),
                 max_value=date.today(),
-                help="Date the sale occured",
                 key="manual_date"
             )
             sale_qty = st.number_input(
                 "Quantity",
-                min_value=1,
-                max_value=10000,
-                value=1,
-                step=1,
-                help="Number of units sold",
+                min_value=1, max_value=100000,
+                value=1, step=1,
                 key="manual_qty"
             )
-            sale_category=st.selectbox(
+            sale_category = st.selectbox(
                 "Category",
                 options=CATEGORIES,
-                index=0,
-                help="Product Category",
                 key="manual_category"
             )
-            
+
         with col2:
             sale_product = st.text_input(
                 "Product Name",
-                placeholder="e.g., Basmati RIce 5kg",
+                placeholder="e.g., Basmati Rice 5kg",
                 max_chars=200,
-                help="Full product name",
                 key="manual_product"
             )
             sale_price = st.number_input(
-                "Price per unit",
-                min_value=0.01,
-                value=1.0,
-                step=0.50,
+                "Price per Unit (Rs.)",
+                min_value=0.01, max_value=10000000.0,
+                value=1.00, step=0.50,
                 format="%.2f",
-                help="Price per single unit per rupees",
                 key="manual_price"
             )
-            estimated_total = sale_qty*sale_price
-            st.metric(label="Estimated Total",value=f"Rs. {estimated_total}")
-            submit_manual = st.form_submit_button("Save Sale Record",type="primary",use_container_width=True)
-            
-            if submit_manual:
-                if not sale_product.strip():
-                    st.error("Product name cannot be empty")
+            estimated_total = sale_qty * sale_price
+            st.metric("Estimated Total", f"Rs.{estimated_total:,.2f}")
+
+        submit_manual = st.form_submit_button(
+            "Save Sale Record",
+            type="primary",
+            use_container_width=True
+        )
+
+        if submit_manual:
+            if not sale_product.strip():
+                st.error("Product name cannot be empty.")
+            else:
+                with st.spinner("Saving sale record..."):
+                    success, response_data, status_code = api_post(
+                        "/sales/upload-manual",
+                        token=st.session_state["token"],
+                        data={
+                            "date": sale_date.strftime("%Y-%m-%d"),
+                            "product": sale_product.strip(),
+                            "category": sale_category,
+                            "qty": int(sale_qty),
+                            "price": float(sale_price)
+                        }
+                    )
+
+                if success:
+                    st.success(
+                        f"Saved! **{sale_product.strip()}** — "
+                        f"Qty: {sale_qty} x Rs.{sale_price:.2f} = "
+                        f"Rs.{estimated_total:,.2f}"
+                    )
                 else:
-                    with st.spinner("Saving Sale Record..."):
-                        success, response_data, status_code = api_post(
-                            "/sales/upload-manual",
-                            token=st.session_state["token"],
-                            data={
-                                "date":sale_date.strftime("%Y-%m-%d"),
-                                "product":sale_product.strip(),
-                                "category":sale_category,
-                                "qty":int(sale_qty),
-                                "price":float(sale_price)
-                            }
-                        )
-                    if success:
-                        st.success(f"Sale record saved for **{sale_product.strip()}** of quantity: **{sale_qty}** with an estimated total of: **{estimated_total}**")
+                    if status_code == 401:
+                        st.error("Session expired.")
+                    elif status_code == 422:
+                        st.error(f"Validation error: {response_data}")
+                    elif status_code == 0:
+                        st.error(f"Cannot connect to server: {response_data}")
                     else:
-                        if status_code == 401:
-                            st.error("Session expired. Please log out and log in again.")
-                        elif status_code == 403:
-                            st.error("Admin access required.")
-                        elif status_code == 422:
-                            st.error(f"Validation error: {response_data}")
-                            # 422 = Pydantic validation failed on the backend
-                        elif status_code == 0:
-                            st.error(f"Connection error: {response_data}")
-                        else:
-                            st.error(f"Failed to save: {response_data}")
-    
-    st.markdown("---")
-    
-#Recent Uploads Table:
-    
+                        st.error(f"Failed to save: {response_data}")
+
+    st.divider()
+
     st.header("Recent Uploads")
-    st.markdown("Records waiting to be processed by the pipeline (status: 'pending').")
-    
-    refresh_col, _ = st.columns([1,5])
-    with refresh_col:
-        refresh_clicked = st.button(
-            "Refresh",
-            key="refresh_recent",
-            help="Reload the latest records from the database"
-        )
-    
-    with st.spinner("Loading Recent Uploads..."):
-        success, raw_data, status_code = api_get(
+    st.caption("Records currently in the system with status breakdown.")
+
+    ref_col, _ = st.columns([1, 6])
+    with ref_col:
+        st.button("Refresh", key="refresh_recent")
+
+    with st.spinner("Loading records..."):
+        all_success, all_data, all_status = api_get(
             "/sales/raw",
-            token=st.session_state["token"],
-            params={"status":"pending"}
+            token=st.session_state.get("token")
         )
-    
-    if success:
-        if len(raw_data) ==0:
-            st.info("""No pending records found.
-                    Upload a CSV or add a manual entry above to get started""")
+
+    if all_success and all_data:
+        df_all = pd.DataFrame(all_data)
+
+        with st.expander("View Upload History Summary", expanded=False):
+            if "status" in df_all.columns:
+                status_counts = (
+                    df_all.groupby("status")
+                    .size()
+                    .reset_index(name="count")
+                )
+                
+                status_counts.columns = ["Status", "Count"]
+
+                def status_label(s):
+                    icons = {
+                        "pending": "pending",
+                        "processed": "processed",
+                        "failed": "failed"
+                    }
+                    return icons.get(s, s)
+
+                status_counts["Status"] = status_counts["Status"].apply(status_label)
+
+                sc1, sc2, sc3 = st.columns(3)
+                for i, row in status_counts.iterrows():
+                    if i == 0:
+                        sc1.metric(row["Status"], row["Count"])
+                    elif i == 1:
+                        sc2.metric(row["Status"], row["Count"])
+                    elif i == 2:
+                        sc3.metric(row["Status"], row["Count"])
+
+                st.dataframe(status_counts, use_container_width=True, hide_index=True)
+
+        df_pending = df_all[df_all["status"] == "pending"].copy() \
+            if "status" in df_all.columns else df_all
+
+        if df_pending.empty:
+            st.info("No pending records. All uploads have been processed.")
         else:
-            df=pd.DataFrame(raw_data)
-            display_columns={
-                "id":"ID",
-                "date":"Sale Date",
-                "product":"Product",
-                "category":"Category",
-                "qty":"Quantity",
-                "price":"Price(in Rupees)",
-                "status":"Status",
-                "uploaded_by":"Uploaded by (User ID)"
+            st.markdown(f"**{len(df_pending)} pending record(s):**")
+
+            display_cols = {
+                "id": "ID",
+                "date": "Sale Date",
+                "product": "Product",
+                "category": "Category",
+                "qty": "Qty",
+                "price": "Price (Rs.)",
+                "status": "Status"
             }
-            available_cols = [c for c in display_columns.keys() if c in df.columns]
-            df_display = df[available_cols].rename(columns=display_columns)
-            
+            available  = [c for c in display_cols if c in df_pending.columns]
+            df_display = df_pending[available].rename(columns=display_cols)
+
             if "Sale Date" in df_display.columns:
                 df_display["Sale Date"] = pd.to_datetime(
-                    df_display["Sale Date"]
+                    df_display["Sale Date"], errors="coerce"
                 ).dt.strftime("%d %b %Y")
-            if "Price(in Rupees)" in df_display.columns:
-                df_display["Price(in Rupees)"] = df_display["Price(in Rupees)"].apply(
-                    lambda x:f"Rs.{x:,.2f}"
+
+            if "Price (Rs.)" in df_display.columns:
+                df_display["Price (Rs.)"] = df_display["Price (Rs.)"].apply(
+                    lambda x: f"Rs.{x:,.2f}" if pd.notna(x) else "Rs.0.00"
                 )
-            
-            stat_col1, stat_col2, stat_col3 = st.columns(3)
-            with stat_col1:
-                st.metric("Total Pending Records", len(df))
-            with stat_col2:
-                if "Qty" in df_display.columns:
-                    st.metric("Total Units", int(df["qty"].sum()))
-            with stat_col3:
-                if "price" in df.columns and "qty" in df.columns:
-                    total_value = (df["price"] * df["qty"]).sum()
-                    st.metric("Total Value", f"₹{total_value:,.2f}")
-            st.dataframe(df_display,use_container_width=True,hide_index=True)
-    
-    else:
-        if status_code == 401:
-            st.error("Session expired. Please log out and log in again.")
-        elif status_code == 0:
-            st.error(f"Cannot connect to server: {raw_data}")
+
+            st1, st2, st3 = st.columns(3)
+            st1.metric("Pending Records", len(df_pending))
+            if "qty" in df_pending.columns:
+                st2.metric("Total Units", int(df_pending["qty"].sum()))
+            if "price" in df_pending.columns and "qty" in df_pending.columns:
+                val = (df_pending["price"] * df_pending["qty"]).sum()
+                st3.metric("Total Value", f"Rs.{val:,.2f}")
+
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+    elif not all_success:
+        if all_status == 0:
+            st.error("Cannot connect to server.")
         else:
-            st.error(f"Failed to load records: {raw_data}")
+            st.error(f"Failed to load records: {all_data}")
+    else:
+        st.info("No records uploaded yet.")

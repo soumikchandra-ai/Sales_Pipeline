@@ -102,4 +102,43 @@ def api_post(endpoint:str, data:dict | None=None, token:str | None= None, files=
     except Exception as e:
         return False, f"Unexpected error: {str(e)}", 0
     
-    
+def api_patch(
+    endpoint: str,
+    data: dict | None = None,
+    token: str | None = None
+) -> tuple[bool, any, int]:
+    """
+    Sends a PATCH request to the FastAPI backend.
+    Used for partial updates (e.g., changing a user's role).
+    """
+    url = f"{BASE_URL}{endpoint}"
+    headers = _build_headers(token)
+
+    try:
+        response = httpx.patch(
+            url,
+            headers=headers,
+            json=data,
+            timeout=DEFAULT_TIMEOUT
+        )
+        
+        if response.status_code == 401:
+            if endpoint not in ("/auth/login", "/auth/register"):
+                _handle_session_expiry()
+                return False, "Session expired", 401
+            else:
+                return False, _parse_error(response), 401
+
+        if response.status_code in (200, 201):
+            return True, response.json(), response.status_code
+
+        return False, _parse_error(response), response.status_code
+
+    except httpx.ConnectError:
+        return False, f"Cannot connect to {BASE_URL}. Is the backend running?", 0
+    except httpx.TimeoutException:
+        return False, f"Request timed out after {DEFAULT_TIMEOUT}s.", 0
+    except Exception as e:
+        return False, f"Unexpected error: {str(e)}", 0
+
+    return False, "Unknown error in api_patch()", 0

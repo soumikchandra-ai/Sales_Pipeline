@@ -6,8 +6,9 @@ import backend.models
 import pandas as pd
 from sqlalchemy import func, cast, Date
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
 from datetime import timedelta,datetime, date as date_type
-from backend.models import User,RawSale,ProcessedSale
+from backend.models import User,RawSale,ProcessedSale,PipelineRun
 from backend.schemas import UserRegisterSchema, UserLoginSchema, TokenResponseSchema, UserResponseSchema, RawSaleCreate, RawSaleResponse, ProccessedSaleResponse, CSVUploadResponse
 from backend.pipeline import run_pipeline
 from backend.auth import hash_password, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user, require_role, require_admin, require_viewer
@@ -618,4 +619,145 @@ def get_category_breakdown(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch category breakdown: {str(e)}"
+        )
+        
+class RoleUpdateSchema(BaseModel):
+    """Request body for changing a user's role."""
+    role: str = Field(..., description="New role: 'admin' or 'viewer'")
+
+@app.patch("/admin/users/{user_id}/role", tags=["Admin"])
+def update_user_role(
+    user_id: int,
+    role_data: RoleUpdateSchema,
+    current_user: User = require_admin,
+    db: Session = Depends(get_db)
+):
+    """
+    Changes the role of a user by their ID.
+    Admin only.
+    """
+    allowed_roles = ["admin", "viewer"]
+    if role_data.role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role '{role_data.role}'. Must be one of: {allowed_roles}"
+        )
+
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot change your own role. Ask another admin."
+        )
+
+    target_user = db.query(User).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User with ID {user_id} not found."
+        )
+
+    old_role = target_user.role
+    target_user.role = role_data.role
+    db.commit()
+    db.refresh(target_user)
+
+    logger.info(
+        f"Admin '{current_user.username}' changed "
+        f"'{target_user.username}' role: {old_role} → {role_data.role}"
+    )
+
+    return {
+        "message": (
+            f"Successfully changed '{target_user.username}' "
+            f"from '{old_role}' to '{role_data.role}'"
+        ),
+        "user": {
+            "id" : target_user.id,
+            "username" : target_user.username,
+            "role" : target_user.role,
+            "created_at" : target_user.created_at.isoformat()
+                          if target_user.created_at else None
+        }
+    }
+
+@app.get("/pipeline/history", tags=["Pipeline"])
+def get_pipeline_history(
+    limit: int = Query(default=10, ge=1, le=100),
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns the last N pipeline runs ordered by most recent first.
+    Viewer and above.
+    """
+    try:
+        runs = (
+            db.query(PipelineRun)
+            .order_by(PipelineRun.run_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+        return [
+            {
+                "id" : r.id,
+                "run_at" : r.run_at.isoformat() if r.run_at else None,
+                "total_loaded" : r.total_loaded,
+                "processed" : r.processed,
+                "failed" : r.failed,
+                "skipped_duplicates" : r.skipped_duplicates,
+                "total_revenue" : r.total_revenue,
+                "tax_collected" : r.tax_collected,
+                "triggered_by" : r.triggered_by
+            }
+            for r in runs
+        ]
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch pipeline history: {str(e)}"
+        )
+
+@app.post("/pipeline/run", tags=["Pipeline"])
+def trigger_pipeline(
+    current_user: User = require_admin,
+    db: Session = Depends(get_db)
+):
+    """
+    Triggers the full ETL pipeline and records the run in pipeline_runs.
+    Admin only.
+    """
+    try:
+        logger.info(f"Pipeline triggered by: {current_user.username}")
+        summary = run_pipeline(db)
+
+        pipeline_run = PipelineRun(
+            total_loaded = summary.get("total_loaded", 0),
+            processed = summary.get("processed", 0),
+            failed = summary.get("failed", 0),
+            skipped_duplicates= summary.get("skipped_duplicates", 0),
+            total_revenue = summary.get("total_revenue", 0.0),
+            tax_collected = summary.get("tax_collected", 0.0),
+            triggered_by = current_user.username
+        )
+        db.add(pipeline_run)
+        db.commit()
+        
+        return {
+            "triggered_by": current_user.username,
+            "total_loaded": summary.get("total_loaded", 0),
+            "processed": summary.get("processed", 0),
+            "failed": summary.get("failed", 0),
+            "skipped_duplicates": summary.get("skipped_duplicates", 0),
+            "tax_collected": summary.get("tax_collected", 0.0),
+            "total_revenue": summary.get("total_revenue", 0.0),
+            "message": summary.get("message", "Pipeline complete.")
+        }
+
+    except Exception as e:
+        logger.error(f"Pipeline crashed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Pipeline failed: {str(e)}"
         )

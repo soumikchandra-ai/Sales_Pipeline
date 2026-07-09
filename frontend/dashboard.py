@@ -18,17 +18,15 @@ except OSError:
         pass
 
 def show_dashboard_page():
-    """
-    Renders the complete Sales Dashboard.
-    Called from app.py when user selects Dashboard.
-    """
-
+    """Renders the complete Sales Dashboard."""
     st.title("Sales Dashboard")
-    st.markdown(
-        "Real-time analytics from your processed sales data. "
-        "Run the **Pipeline** page first if you don't see any data here."
-    )
+    st.caption("Real-time analytics from processed sales data.")
 
+    ref_col, _ = st.columns([1, 6])
+    with ref_col:
+        if st.button("Refresh Dashboard", key="refresh_dashboard"):
+            st.rerun()
+            
     st.divider()
     st.header("Key Performance Indicators")
 
@@ -40,51 +38,62 @@ def show_dashboard_page():
 
     if not success:
         if status_code == 0:
-            st.error(
-                "Cannot connect to the backend server. "
-                "Make sure it is running."
-            )
+            st.error("Cannot connect to the backend server.")
         else:
             st.error(f"Failed to load summary: {summary_data}")
         summary_data = {
-            "total_revenue" : 0.0,
-            "total_tax" : 0.0,
-            "total_orders" : 0,
-            "avg_order_value": 0.0,
-            "last_updated" : None
+            "total_revenue": 0.0, "total_tax": 0.0,
+            "total_orders": 0, "avg_order_value": 0.0,
+            "last_updated": None
         }
+
+    hist_ok, hist_data, _ = api_get(
+        "/pipeline/history",
+        token=st.session_state.get("token"),
+        params={"limit": 2}
+    )
+
+    revenue_delta = None
+    if hist_ok and hist_data and len(hist_data) >= 2:
+        current_run_rev  = hist_data[0].get("total_revenue", 0)
+        previous_run_rev = hist_data[1].get("total_revenue", 0)
+        if previous_run_rev > 0:
+            revenue_delta = round(current_run_rev - previous_run_rev, 2)
+            
     has_data = summary_data.get("total_orders", 0) > 0
+
     if not has_data:
         st.warning(
-            "No processed data available yet. "
-            "Go to the **Upload** page to add sales data, "
-            "then run the **Pipeline** to process it."
+            "No processed data yet. "
+            "Upload data and run the Pipeline first."
         )
+
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 
     with kpi1:
         st.metric(
             label="Total Revenue",
             value=_format_currency(summary_data.get("total_revenue", 0.0)),
-            help="Sum of all final_amount in processed_sales"
+            delta=(
+                f"Rs.{revenue_delta:+,.2f} vs prev run"
+                if revenue_delta is not None else None
+            ),
+            delta_color="normal"
         )
     with kpi2:
         st.metric(
             label="Tax Collected",
-            value=_format_currency(summary_data.get("total_tax", 0.0)),
-            help="Total GST (18%) collected"
+            value=_format_currency(summary_data.get("total_tax", 0.0))
         )
     with kpi3:
         st.metric(
             label="Total Orders",
-            value=f"{summary_data.get('total_orders', 0):,}",
-            help="Count of processed sales records"
+            value=f"{summary_data.get('total_orders', 0):,}"
         )
     with kpi4:
         st.metric(
             label="Avg Order Value",
-            value=_format_currency(summary_data.get("avg_order_value", 0.0)),
-            help="Average final_amount per sale"
+            value=_format_currency(summary_data.get("avg_order_value", 0.0))
         )
 
     last_updated = summary_data.get("last_updated")
@@ -98,296 +107,240 @@ def show_dashboard_page():
         st.caption("Last updated: Never")
 
     st.divider()
-    st.header("Revenue Trend")
 
-    if "filter_start_date" not in st.session_state:
-        st.session_state["filter_start_date"] = date.today() - timedelta(days=30)
-    if "filter_end_date" not in st.session_state:
-        st.session_state["filter_end_date"] = date.today()
-
-    st.markdown("**Quick ranges:**")
-    btn_col1, btn_col2, btn_col3 = st.columns(3)
-    with btn_col1:
-        if st.button("Last 7 days", key="range_7d", use_container_width=True):
-            st.session_state["filter_start_date"] = date.today() - timedelta(days=7)
-            st.session_state["filter_end_date"]   = date.today()
-    with btn_col2:
-        if st.button("Last 30 days", key="range_30d", use_container_width=True):
+    with st.expander("Revenue Trend Chart", expanded=True):
+        if "filter_start_date" not in st.session_state:
             st.session_state["filter_start_date"] = date.today() - timedelta(days=30)
-            st.session_state["filter_end_date"]   = date.today()
-    with btn_col3:
-        if st.button("All time", key="range_all", use_container_width=True):
-            st.session_state["filter_start_date"] = date(2020, 1, 1)
-            st.session_state["filter_end_date"]   = date.today()
+        if "filter_end_date" not in st.session_state:
+            st.session_state["filter_end_date"] = date.today()
 
-    dcol1, dcol2 = st.columns(2)
-    with dcol1:
-        start_date = st.date_input(
-            "Start Date",
-            value=st.session_state["filter_start_date"],
-            max_value=date.today(),
-            key="widget_start_date"
-        )
-    with dcol2:
-        end_date = st.date_input(
-            "End Date",
-            value=st.session_state["filter_end_date"],
-            max_value=date.today(),
-            min_value=start_date,
-            key="widget_end_date"
-        )
-    st.session_state["filter_start_date"] = start_date
-    st.session_state["filter_end_date"]   = end_date
+        st.markdown("**Quick ranges:**")
+        btn1, btn2, btn3 = st.columns(3)
+        with btn1:
+            if st.button("Last 7d",  key="range_7d",  use_container_width=True):
+                st.session_state["filter_start_date"] = date.today() - timedelta(days=7)
+                st.session_state["filter_end_date"] = date.today()
+        with btn2:
+            if st.button("Last 30d", key="range_30d", use_container_width=True):
+                st.session_state["filter_start_date"] = date.today() - timedelta(days=30)
+                st.session_state["filter_end_date"] = date.today()
+        with btn3:
+            if st.button("All time", key="range_all", use_container_width=True):
+                st.session_state["filter_start_date"] = date(2020, 1, 1)
+                st.session_state["filter_end_date"] = date.today()
 
-    if start_date > end_date:
-        st.error("Start date must be before end date.")
-        st.stop()
-
-    with st.spinner("Loading revenue trend..."):
-        trend_success, trend_data, trend_status = api_get(
-            "/dashboard/revenue-trend",
-            token=st.session_state.get("token"),
-            params={
-                "start_date": start_date.strftime("%Y-%m-%d"),
-                "end_date"  : end_date.strftime("%Y-%m-%d")
-            }
-        )
-
-    if not trend_success:
-        st.error(
-            f"Failed to load trend data: {trend_data}"
-            if trend_status != 0
-            else "Cannot connect to backend server."
-        )
-    elif not trend_data:
-        st.info(
-            f"No revenue data found between "
-            f"**{start_date.strftime('%d %b %Y')}** and "
-            f"**{end_date.strftime('%d %b %Y')}**."
-        )
-    else:
-        dates = [row["date"] for row in trend_data]
-        revenues = [row["revenue"] for row in trend_data]
-
-        fig = _build_revenue_chart(dates, revenues, start_date, end_date)
-        st.pyplot(fig)
-        plt.close(fig)
-        
-        with st.expander("View raw trend data"):
-            df_trend = pd.DataFrame(trend_data)
-            df_trend.columns = ["Date", "Revenue (Rs.)", "Orders"]
-            df_trend["Revenue (Rs.)"] = df_trend["Revenue (Rs.)"].apply(
-                lambda x: f"Rs.{x:,.2f}"
+        dcol1, dcol2 = st.columns(2)
+        with dcol1:
+            start_date = st.date_input(
+                "Start Date",
+                value=st.session_state["filter_start_date"],
+                max_value=date.today(),
+                key="widget_start_date"
             )
-            st.dataframe(df_trend, use_container_width=True, hide_index=True)
+        with dcol2:
+            end_date = st.date_input(
+                "End Date",
+                value=st.session_state["filter_end_date"],
+                max_value=date.today(),
+                min_value=start_date,
+                key="widget_end_date"
+            )
+
+        st.session_state["filter_start_date"] = start_date
+        st.session_state["filter_end_date"] = end_date
+
+        if start_date > end_date:
+            st.error("Start date must be before end date.")
+        else:
+            with st.spinner("Loading revenue trend..."):
+                trend_ok, trend_data, trend_status = api_get(
+                    "/dashboard/revenue-trend",
+                    token=st.session_state.get("token"),
+                    params={
+                        "start_date": start_date.strftime("%Y-%m-%d"),
+                        "end_date" : end_date.strftime("%Y-%m-%d")
+                    }
+                )
+
+            if not trend_ok:
+                st.error(
+                    "Cannot connect to server." if trend_status == 0
+                    else f"{trend_data}"
+                )
+            elif not trend_data:
+                st.info("No revenue data for selected range.")
+            else:
+                dates = [r["date"] for r in trend_data]
+                revenues = [r["revenue"] for r in trend_data]
+                fig = _build_revenue_chart(dates, revenues, start_date, end_date)
+                st.pyplot(fig)
+                plt.close(fig)
+
+                with st.expander("Raw trend data"):
+                    df_t = pd.DataFrame(trend_data)
+                    df_t.columns = ["Date", "Revenue (Rs.)", "Orders"]
+                    df_t["Revenue (Rs.)"] = df_t["Revenue (Rs.)"].apply(
+                        lambda x: f"Rs.{x:,.2f}"
+                    )
+                    st.dataframe(df_t, use_container_width=True, hide_index=True)
 
     st.divider()
 
-    chart_col_left, chart_col_right = st.columns(2)
-    
-    with chart_col_left:
-        st.subheader("Top Products by Revenue")
+    with st.expander("Product & Category Charts", expanded=True):
+        left_col, right_col = st.columns(2)
 
-        product_limit = st.slider(
-            "Number of products to show",
-            min_value=5,
-            max_value=20,
-            value=10,
-            step=1,
-            key="product_limit_slider",
-            help="Drag to show more or fewer products in the chart"
-        )
-        
-        with st.spinner("Loading top products..."):
-            prod_success, prod_data, prod_status = api_get(
-                "/dashboard/top-products",
-                token=st.session_state.get("token"),
-                params={"limit": product_limit}
+        with left_col:
+            st.subheader("Top Products by Revenue")
+            product_limit = st.slider(
+                "Number of products",
+                min_value=5, max_value=20, value=10, step=1,
+                key="product_limit_slider"
             )
+            with st.spinner("Loading top products..."):
+                prod_ok, prod_data, prod_status = api_get(
+                    "/dashboard/top-products",
+                    token=st.session_state.get("token"),
+                    params={"limit": product_limit}
+                )
+            if not prod_ok:
+                st.error(
+                    "Cannot connect to server." if prod_status == 0
+                    else f"{prod_data}"
+                )
+            elif not prod_data:
+                st.info("No product data yet.")
+            else:
+                st.plotly_chart(
+                    _build_top_products_chart(prod_data),
+                    use_container_width=True
+                )
 
-        if not prod_success:
-            st.error(
-                f"Failed to load products: {prod_data}"
-                if prod_status != 0
-                else "Cannot connect to backend."
-            )
-        elif not prod_data:
-            st.info("No product data available yet.")
-        else:
-            fig_bar = _build_top_products_chart(prod_data)
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-    with chart_col_right:
-        st.subheader("Revenue by Category")
+        with right_col:
+            st.subheader("Revenue by Category")
+            with st.spinner("Loading categories..."):
+                cat_ok, cat_data, cat_status = api_get(
+                    "/dashboard/category-breakdown",
+                    token=st.session_state.get("token")
+                )
+            if not cat_ok:
+                st.error(
+                    "Cannot connect to server." if cat_status == 0
+                    else f"{cat_data}"
+                )
+            elif not cat_data:
+                st.info("No category data yet.")
+            else:
+                st.plotly_chart(
+                    _build_category_donut(cat_data),
+                    use_container_width=True
+                )
+                df_cat = pd.DataFrame(cat_data)
+                df_cat_disp = df_cat[
+                    ["category", "revenue", "percentage", "order_count"]
+                ].copy()
+                df_cat_disp.columns = ["Category", "Revenue (Rs.)", "Share (%)", "Orders"]
+                df_cat_disp["Revenue (Rs.)"] = df_cat_disp["Revenue (Rs.)"].apply(
+                    lambda x: f"Rs.{x:,.2f}"
+                )
+                df_cat_disp["Share (%)"] = df_cat_disp["Share (%)"].apply(
+                    lambda x: f"{x:.2f}%"
+                )
+                st.dataframe(df_cat_disp, use_container_width=True, hide_index=True)
 
-        with st.spinner("Loading category data..."):
-            cat_success, cat_data, cat_status = api_get(
-                "/dashboard/category-breakdown",
+    st.divider()
+
+    with st.expander("Full Processed Sales Data + CSV Export", expanded=False):
+        with st.spinner("Loading data table..."):
+            tbl_ok, tbl_data, tbl_status = api_get(
+                "/sales/processed",
                 token=st.session_state.get("token")
             )
+            raw_ok, raw_data, _ = api_get(
+                "/sales/raw",
+                token=st.session_state.get("token"),
+                params={"status": "processed"}
+            )
 
-        if not cat_success:
+        if not tbl_ok:
             st.error(
-                f"Failed to load categories: {cat_data}"
-                if cat_status != 0
-                else "Cannot connect to backend."
+                "Cannot connect to server." if tbl_status == 0
+                else f"{tbl_data}"
             )
-        elif not cat_data:
-            st.info("No category data available yet.")
+        elif not tbl_data:
+            st.info("No processed records to display.")
         else:
-            fig_donut = _build_category_donut(cat_data)
-            st.plotly_chart(fig_donut, use_container_width=True)
+            df_proc = pd.DataFrame(tbl_data)
 
-            df_cat = pd.DataFrame(cat_data)
-            df_cat_display = df_cat[
-                ["category", "revenue", "percentage", "order_count"]
-            ].copy()
-            df_cat_display.columns = [
-                "Category", "Revenue (Rs.)", "Share (%)", "Orders"
-            ]
-            df_cat_display["Revenue (Rs.)"] = df_cat_display["Revenue (Rs.)"].apply(
-                lambda x: f"Rs.{x:,.2f}"
-            )
-            df_cat_display["Share (%)"] = df_cat_display["Share (%)"].apply(
-                lambda x: f"{x:.2f}%"
-            )
-            st.dataframe(
-                df_cat_display,
-                use_container_width=True,
-                hide_index=True
-            )
-
-    st.divider()
-    st.header("Processed Sales Data")
-    st.markdown(
-        "Complete record of all sales that have been through the ETL pipeline. "
-        "Download as CSV for offline analysis."
-    )
-
-    with st.spinner("Loading processed sales data..."):
-        table_success, table_data, table_status = api_get(
-            "/sales/processed",
-            token=st.session_state.get("token")
-        )
-
-    if not table_success:
-        st.error(
-            f"Failed to load data: {table_data}"
-            if table_status != 0
-            else "Cannot connect to backend."
-        )
-    elif not table_data:
-        st.info("No processed records to display.")
-    else:
-        df_processed = pd.DataFrame(table_data)
-        raw_success, raw_data, _ = api_get(
-            "/sales/raw",
-            token=st.session_state.get("token"),
-            params={"status": "processed"}
-        )
-
-        if raw_success and raw_data:
-            df_raw = pd.DataFrame(raw_data)        
-            df_combined = df_processed.merge(
-                df_raw[["id", "date", "product", "category", "qty", "price"]],
-                left_on="raw_id",
-                right_on="id",
-                how="left",
-                suffixes=("_proc", "_raw")            
-            )        
-        else:
-            df_combined = df_processed
-        if "processed_at" in df_combined.columns:
-            df_combined = df_combined.sort_values(
-                "processed_at",
-                ascending=False            
-            ).reset_index(drop=True)
-        display_col_map = {
-            "date" : "Sale Date",
-            "product" : "Product",
-            "category" : "Category",
-            "qty" : "Qty",
-            "price" : "Unit Price (Rs.)",
-            "total" : "Subtotal (Rs.)",
-            "tax" : "Tax (Rs.)",
-            "discount" : "Discount (Rs.)",
-            "final_amount" : "Final Amount (Rs.)",
-            "processed_at" : "Processed At"
-        }
-        available = [c for c in display_col_map if c in df_combined.columns]
-        df_display = df_combined[available].rename(columns=display_col_map)
-        if "Sale Date" in df_display.columns:
-            df_display["Sale Date"] = pd.to_datetime(
-                df_display["Sale Date"], errors="coerce"
-            ).dt.strftime("%d %b %Y")
-
-        if "Processed At" in df_display.columns:
-            df_display["Processed At"] = pd.to_datetime(
-                df_display["Processed At"], errors="coerce"
-            ).dt.strftime("%d %b %Y, %H:%M")
-        tbl1, tbl2, tbl3 = st.columns(3)
-        with tbl1:
-            st.metric("Records", len(df_display))
-        with tbl2:
-            if "final_amount" in df_combined.columns:
-                st.metric(
-                    "Total Revenue",
-                    f"Rs.{df_combined['final_amount'].sum():,.2f}"
+            if raw_ok and raw_data:
+                df_raw = pd.DataFrame(raw_data)
+                df_combined = df_proc.merge(
+                    df_raw[["id", "date", "product", "category", "qty", "price"]],
+                    left_on="raw_id", right_on="id",
+                    how="left", suffixes=("_proc", "_raw")
                 )
-        with tbl3:
-            if "tax" in df_combined.columns:
-                st.metric(
-                    "Total Tax",
-                    f"Rs.{df_combined['tax'].sum():,.2f}"
-                )
+            else:
+                df_combined = df_proc
 
-        st.dataframe(
-            df_display,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Unit Price (Rs.)" : st.column_config.NumberColumn(
-                    "Unit Price (Rs.)",
-                    format="Rs. %.2f"
-                ),
-                "Subtotal (Rs.)" : st.column_config.NumberColumn(
-                    "Subtotal (Rs.)",
-                    format="Rs. %.2f"
-                ),
-                "Tax (Rs.)" : st.column_config.NumberColumn(
-                    "Tax (Rs.)",
-                    format="Rs. %.2f"
-                ),
-                "Discount (Rs.)" : st.column_config.NumberColumn(
-                    "Discount (Rs.)",
-                    format="Rs. %.2f"
-                ),
-                "Final Amount (Rs.)": st.column_config.NumberColumn(
-                    "Final Amount (Rs.)",
-                    format="Rs. %.2f"
-                ),
-                "Qty" : st.column_config.NumberColumn(
-                    "Qty",
-                    format="%d"
-                )
+            if "processed_at" in df_combined.columns:
+                df_combined = df_combined.sort_values(
+                    "processed_at", ascending=False
+                ).reset_index(drop=True)
+
+            display_col_map = {
+                "date" : "Sale Date",
+                "product" : "Product",
+                "category" : "Category",
+                "qty" : "Qty",
+                "price" : "Unit Price (Rs.)",
+                "total" : "Subtotal (Rs.)",
+                "tax" : "Tax (Rs.)",
+                "discount" : "Discount (Rs.)",
+                "final_amount" : "Final Amount (Rs.)",
+                "processed_at" : "Processed At"
             }
-        )
+            available = [c for c in display_col_map if c in df_combined.columns]
+            df_display = df_combined[available].rename(columns=display_col_map)
 
-        # CSV Download Button
-        csv_df = df_display.copy()
-        csv_string = csv_df.to_csv(index=False)
-        download_filename = (
-            f"sales_report_{date.today().strftime('%Y-%m-%d')}.csv"
-        )
-        st.download_button(
-            label="⬇️ Download Report as CSV",
-            data=csv_string,    
-            file_name=download_filename,
-            mime="text/csv",    
-            type="primary",
-            use_container_width=False,
-            key="download_csv_btn"
-        )
+            if "Sale Date" in df_display.columns:
+                df_display["Sale Date"] = pd.to_datetime(
+                    df_display["Sale Date"], errors="coerce"
+                ).dt.strftime("%d %b %Y")
+
+            if "Processed At" in df_display.columns:
+                df_display["Processed At"] = pd.to_datetime(
+                    df_display["Processed At"], errors="coerce"
+                ).dt.strftime("%d %b %Y, %H:%M")
+
+            t1, t2, t3 = st.columns(3)
+            t1.metric("Records", len(df_display))
+            if "final_amount" in df_combined.columns:
+                t2.metric("Total Revenue", f"Rs.{df_combined['final_amount'].sum():,.2f}")
+            if "tax" in df_combined.columns:
+                t3.metric("Total Tax",     f"Rs.{df_combined['tax'].sum():,.2f}")
+
+            st.dataframe(
+                df_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Unit Price (Rs.)": st.column_config.NumberColumn(format="Rs. %.2f"),
+                    "Subtotal (Rs.)": st.column_config.NumberColumn(format="Rs. %.2f"),
+                    "Tax (Rs.)": st.column_config.NumberColumn(format="Rs. %.2f"),
+                    "Discount (Rs.)": st.column_config.NumberColumn(format="Rs. %.2f"),
+                    "Final Amount (Rs.)": st.column_config.NumberColumn(format="Rs. %.2f"),
+                    "Qty": st.column_config.NumberColumn(format="%d")
+                }
+            )
+
+            csv_string = df_display.to_csv(index=False)
+            st.download_button(
+                label="Download Report as CSV",
+                data=csv_string,
+                file_name=f"sales_report_{date.today().strftime('%Y-%m-%d')}.csv",
+                mime="text/csv",
+                type="primary",
+                key="download_csv_btn"
+            )
 
 def _build_top_products_chart(prod_data: list) -> go.Figure:
     """

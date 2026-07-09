@@ -60,3 +60,25 @@ class ProcessedSale(Base):
     
     def __repr__(self):
         return f"ProcessedSale(id={self.id}, raw_id={self.raw_id}, final_amount={self.final_amount})"
+    
+class PipelineRun(Base):
+    """
+    Records every ETL pipeline execution.
+    Used to show run history and calculate KPI deltas.
+    """
+    __tablename__ = "pipeline_runs"
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    run_at        = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    total_loaded  = Column(Integer, default=0)
+    processed     = Column(Integer, default=0)
+    failed        = Column(Integer, default=0)
+    skipped_duplicates = Column(Integer, default=0)
+    total_revenue = Column(Float, default=0.0)
+    tax_collected = Column(Float, default=0.0)
+    triggered_by  = Column(String(100), nullable=True)
+    def __repr__(self):
+        return (
+            f"PipelineRun(id={self.id}, "
+            f"processed={self.processed}, "
+            f"revenue={self.total_revenue})"
+        )
