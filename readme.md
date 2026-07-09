@@ -44,14 +44,24 @@ sales_pipeline/
 │   ├── models.py
 │   ├── pipeline.py
 │   └── main.py
+│   └── schemas.py
 │
 ├── frontend/
+│   ├── admin.py
+│   ├── api_client.py
 │   ├── app.py
-│   ├── login.py
-│   ├── upload.py
-│   ├── pipeline.py
 │   ├── dashboard.py
-│   └── api_client.py
+│   ├── login.py
+│   └── pipeline.py
+│   └── upload.py
+│
+├── Screenshots/
+│   ├── Admin_panel.png
+│   ├── Dashboard.png
+│   ├── Login.png
+│   ├── Pipeline.png
+│   ├── Register.png
+│   └── Upload.png
 │
 ├── data/
 │   ├── sales.db
