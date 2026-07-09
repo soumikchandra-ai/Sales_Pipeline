@@ -67,18 +67,32 @@ class PipelineRun(Base):
     Used to show run history and calculate KPI deltas.
     """
     __tablename__ = "pipeline_runs"
-    id            = Column(Integer, primary_key=True, autoincrement=True)
-    run_at        = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     total_loaded  = Column(Integer, default=0)
-    processed     = Column(Integer, default=0)
-    failed        = Column(Integer, default=0)
+    processed = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
     skipped_duplicates = Column(Integer, default=0)
     total_revenue = Column(Float, default=0.0)
     tax_collected = Column(Float, default=0.0)
-    triggered_by  = Column(String(100), nullable=True)
+    triggered_by = Column(String(100), nullable=True)
     def __repr__(self):
         return (
             f"PipelineRun(id={self.id}, "
             f"processed={self.processed}, "
             f"revenue={self.total_revenue})"
         )
+
+class PipelineStatus(Base):
+    """
+    Single-row table that acts as a pipeline lock.
+    Prevents two admins from triggering the pipeline simultaneously.
+    """
+    __tablename__ = "pipeline_status"
+    id = Column(Integer, primary_key=True, default=1)
+    is_running = Column(Integer,default=0)
+    started_at = Column(DateTime, nullable=True)
+    locked_by  = Column(String(100), nullable=True)
+
+    def __repr__(self):
+        return f"PipelineStatus(is_running={self.is_running}, locked_by={self.locked_by})"

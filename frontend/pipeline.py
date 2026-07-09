@@ -156,14 +156,22 @@ def show_pipeline_page():
                                     )
 
                 else:
-                    if status_code == 403:
-                        st.error("Admin access required.")
+                    if status_code == 409:
+                        st.warning(
+                            f"{response_data}\n\n"
+                            "The pipeline is already running. "
+                            "Please wait for it to complete, then refresh this page."
+                        )
+                    elif status_code == 403:
+                        st.error("Admin access required to run the pipeline.")
                     elif status_code == 0:
-                        st.error(f"Cannot connect to server: {response_data}")
+                        st.error(
+                            f"Cannot connect to the backend server.\n{response_data}"
+                        )
                     elif status_code == 500:
-                        st.error(f"Pipeline crashed: {response_data}")
+                        st.error(f"Pipeline crashed on the server: {response_data}")
                     else:
-                        st.error(f"Pipeline failed: {response_data}")
+                        st.error(f"Pipeline failed (status {status_code}): {response_data}")
 
     st.divider()
 

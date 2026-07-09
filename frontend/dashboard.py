@@ -332,15 +332,18 @@ def show_dashboard_page():
                 }
             )
 
-            csv_string = df_display.to_csv(index=False)
-            st.download_button(
-                label="Download Report as CSV",
-                data=csv_string,
-                file_name=f"sales_report_{date.today().strftime('%Y-%m-%d')}.csv",
-                mime="text/csv",
-                type="primary",
-                key="download_csv_btn"
-            )
+            if len(df_display) == 0:
+                st.info("No Data to download. Run the pipeline first.")
+            else:
+                csv_string = df_display.to_csv(index=False)
+                st.download_button(
+                    label="Download Report as CSV",
+                    data=csv_string,
+                    file_name=f"sales_report_{date.today().strftime('%Y-%m-%d')}.csv",
+                    mime="text/csv",
+                    type="primary",
+                    key="download_csv_btn"
+                )
 
 def _build_top_products_chart(prod_data: list) -> go.Figure:
     """

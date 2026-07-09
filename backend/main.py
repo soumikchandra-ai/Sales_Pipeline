@@ -1,435 +1,782 @@
 import io
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Query
-from typing import Optional, List
-from backend.database import engine,Base, get_db
-import backend.models
+import time
+import logging
+import logging.handlers
+import os
+from datetime import timedelta, datetime, timezone
 import pandas as pd
-from sqlalchemy import func, cast, Date
+from fastapi import FastAPI, Depends, HTTPException,status, UploadFile, File, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
-from datetime import timedelta,datetime, date as date_type
-from backend.models import User,RawSale,ProcessedSale,PipelineRun
-from backend.schemas import UserRegisterSchema, UserLoginSchema, TokenResponseSchema, UserResponseSchema, RawSaleCreate, RawSaleResponse, ProccessedSaleResponse, CSVUploadResponse
-from backend.pipeline import run_pipeline
+from sqlalchemy import func, cast, Date
+from typing import Optional, List
+from backend.database import engine, Base, get_db
+import backend.models
+from backend.models import User, RawSale, ProcessedSale, PipelineRun, PipelineStatus
+from backend.schemas import UserRegisterSchema, UserLoginSchema,TokenResponseSchema, UserResponseSchema,RawSaleCreate, RawSaleResponse,ProcessedSaleResponse, CSVUploadResponse,RoleUpdateSchema
 from backend.auth import hash_password, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user, require_role, require_admin, require_viewer
+from backend.pipeline import run_pipeline
 
-app=FastAPI(
-    title="Sales pipeline API",
+def setup_api_logger() -> logging.Logger:
+    """
+    Sets up a dedicated logger for API requests.
+    Writes to data/api.log (separate from pipeline.log).
+    """
+    api_logger = logging.getLogger("api")
+    api_logger.setLevel(logging.INFO)
+
+    if not api_logger.handlers:
+        log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+        os.makedirs(log_dir, exist_ok=True)
+
+        file_handler = logging.handlers.RotatingFileHandler(
+            os.path.join(log_dir, "api.log"),
+            maxBytes=5 * 1024 * 1024,  # 5MB
+            backupCount=5,
+            encoding="utf-8"
+        )
+        
+        formatter = logging.Formatter(
+            "%(asctime)s | %(levelname)-8s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        file_handler.setFormatter(formatter)
+        api_logger.addHandler(file_handler)
+
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.WARNING)
+        console_handler.setFormatter(formatter)
+        api_logger.addHandler(console_handler)
+
+    return api_logger
+
+api_logger  = setup_api_logger()
+pipe_logger = logging.getLogger("pipeline")
+
+app = FastAPI(
+    title="Sales Pipeline API",
     description="Backend API for Sales Data Pipeline Dashboard",
     version="1.0.0"
 )
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """
+    FastAPI middleware that runs for EVERY incoming HTTP request.
+    """
+    start_time = time.time()
+    client_ip = request.client.host if request.client else "unknown"
+
+    try:
+        response = await call_next(request)
+        duration_ms = round((time.time() - start_time) * 1000, 1)
+        log_level = (
+            logging.WARNING if response.status_code >= 400
+            else logging.INFO
+        )
+        api_logger.log(
+            log_level,
+            f"{request.method} {request.url.path} | "
+            f"{response.status_code} | "
+            f"{duration_ms}ms | "
+            f"client={client_ip}"
+        )
+
+        return response
+
+    except Exception as e:
+        duration_ms = round((time.time() - start_time) * 1000, 1)
+        api_logger.error(
+            f"{request.method} {request.url.path} | "
+            f"EXCEPTION | {duration_ms}ms | {str(e)}"
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal server error",
+                "detail": "An unexpected error occurred. Please try again.",
+            }
+        )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Catches ANY unhandled exception in ANY route.
+    Returns a safe JSON response instead of a Python traceback.
+    """
+    api_logger.error(
+        f"Unhandled exception on {request.method} {request.url.path}: "
+        f"{type(exc).__name__}: {str(exc)}"
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "detail": "Something went wrong on the server. Please try again later."
+        }
+    )
+
 Base.metadata.create_all(bind=engine)
 
-REQUIRED_CSV_COLUMNS = {"date","product","category","qty","price"}
+def _ensure_pipeline_status(db):
+    """Creates the initial PipelineStatus row if it doesn't exist."""
+    existing = db.query(PipelineStatus).filter(PipelineStatus.id == 1).first()
+    if not existing:
+        db.add(PipelineStatus(id=1, is_running=0))
+        db.commit()
 
-@app.get("/",tags=["Health"])
+PIPELINE_LOCK_TIMEOUT_MINUTES = 30
+
+def _acquire_pipeline_lock(db: Session, username: str) -> bool:
+    """
+    Tries to acquire the pipeline lock.
+    Returns True if lock was acquired, False if already locked.
+    """
+    _ensure_pipeline_status(db)
+
+    status_row = db.query(PipelineStatus).filter(
+        PipelineStatus.id == 1
+    ).first()
+
+    if status_row.is_running:
+        if status_row.started_at:
+            elapsed = datetime.now(timezone.utc) - status_row.started_at
+            if elapsed.total_seconds() > PIPELINE_LOCK_TIMEOUT_MINUTES * 60:
+                pipe_logger.warning(
+                    f"Stale pipeline lock detected "
+                    f"(started {elapsed.total_seconds()/60:.1f} minutes ago). "
+                    f"Resetting lock."
+                )
+            else:
+                return False
+
+    status_row.is_running  = 1
+    status_row.started_at  = datetime.now(timezone.utc)
+    status_row.locked_by   = username
+    db.commit()
+    return True
+
+
+def _release_pipeline_lock(db: Session):
+    """Releases the pipeline lock after a run completes or fails."""
+    try:
+        status_row = db.query(PipelineStatus).filter(
+            PipelineStatus.id == 1
+        ).first()
+        if status_row:
+            status_row.is_running = 0
+            status_row.started_at = None
+            status_row.locked_by = None
+            db.commit()
+    except Exception as e:
+        pipe_logger.error(f"Failed to release pipeline lock: {e}")
+        
+@app.get("/", tags=["Health"])
 def health_check():
     return {
-        "status":"OK",
-        "message":"Sales Data Pipeline API is running",
-        "version":"1.0.0"
+        "status": "ok",
+        "message": "Sales Pipeline API is running",
+        "version": "1.0.0"
     }
 
-@app.post("/auth/register",tags=["Auth"])
-def register(user_data: UserRegisterSchema, db:Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.username==user_data.username).first()
-    
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already exists.Please choose a differenet username."
-        )
-    
-    allowed_roles=["admin","viewer"]
-    role = user_data.role if user_data.role in allowed_roles else "viewer"
-    hashed = hash_password(user_data.password)
-    
-    new_user = User(
-        username=user_data.username,
-        password_hash=hashed,
-        role=role
-    )
-    
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    return {
-        "message":"User registered Successfully",
-        "username":new_user.username,
-        "role":new_user.role
-    }
-
-@app.post("/auth/login",response_model=TokenResponseSchema, tags=["Auth"])
-def login(user_data: UserLoginSchema, db:Session = Depends(get_db)):
-    """"
-    Login with Username and coorect password.
-    Returns a JWT Token.
+@app.post("/auth/register", tags=["Auth"])
+def register(user_data: UserRegisterSchema, db: Session = Depends(get_db)):
     """
-    user=db.query(User).filter(User.username==user_data.username).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate":"Bearer"}
-        )
-        
-    if not verify_password(user_data.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate":"Bearer"}
-        )
-        
-    token_data = {
-        "sub":user.username,
-        "role":user.role,
-        "id":user.id
-    }
-    
-    access_token = create_access_token(
-        data=token_data,
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    
-    return TokenResponseSchema(
-        access_token=access_token,
-        token_type="bearer"
-    )
-    
-@app.get("/auth/me",tags=["Auth"])
-def get_me(current_user:User = Depends(get_current_user)):
-    """
-    Return info about the currently logged in User
-    """
-    return {
-        "id":current_user.id,
-        "username":current_user.username,
-        "role":current_user.role,
-        "message":f"Hello, {current_user.username}! You are logged in as {current_user.role}"
-    }
-
-#Admin-Only Routes
-@app.get("/admin/dashboard",tags=["Admin"])
-def admin_dashboard(current_user: User= require_admin):
-    """
-    Admin only routes. Users whose role is admin can only access this.
-    """
-    return{
-        "message":f"Welcome to the Admin Dashboard, {current_user.username}!",
-        "role":current_user.role,
-        "access_level":"full",
-        "available_actions":[
-            "View all Users",
-            "Process sales Data",
-            "Delete records",
-            "View all reports"
-        ]
-    }
-
-@app.get("/admin/users",tags=["Admin"])
-def list_all_users(current_user: User = require_admin, db: Session = Depends(get_db)):
-    "Admin route only to list all the Users"
-    users= db.query(User).all() #Returns a list of all User objects from the database
-    
-    return{
-        "total_users":len(users),
-        "users":[
-            {
-                "id":u.id,
-                "username":u.username,
-                "role":u.role,
-                "created_at":u.created_at
-            }
-            for u in users
-        ]
-    }
-    
-#Viewer Routes
-@app.get("/viewer/data",tags=["Viewer"])
-def viewer_data(current_user: User= require_viewer):
-    "Viewer route: Both viewer and admin can access this."
-    return {
-        "message":f"Welcome to the data view {current_user.username}",
-        "role":current_user.role,
-        "access_level":"read_only",
-        "note":"You can view sales data here. Upload and processing requires admin access."
-    }
-    
-@app.get("/viewer/summary",tags=["Viewer"])
-def viewer_summary(current_user: User= require_viewer):
-    "Shows a placeholder summary. Connected to the real sales data."
-    return {
-        "message":"Sales summary appear here",
-        "accessed_by":current_user.username,
-        "role":current_user.role,
-        "placeholder_stats":{
-            "total_sales":0,
-            "total_revenue":0.0,
-            "pending_records":0,
-            "processed_records":0
-        }
-    }
-    
-@app.post("/sales/upload-manual",response_model=RawSaleResponse,tags=["Sales"],status_code=status.HTTP_201_CREATED)
-def upload_manual_sale(sale_data:RawSaleCreate,current_user:User=require_admin,db:Session=Depends(get_db)):
-    """
-    Uplaod a single sale record manually via JSON.
-    Admin ONLY.
+    Registers a new user.
+    Pydantic validates length limits before this function runs.
     """
     try:
+        existing = db.query(User).filter(
+            User.username == user_data.username
+        ).first()
+
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already exists. Please choose a different username."
+            )
+
+        allowed_roles = ["admin", "viewer"]
+        role = user_data.role if user_data.role in allowed_roles else "viewer"
+
+        new_user = User(
+            username = user_data.username,
+            password_hash = hash_password(user_data.password),
+            role = role
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+
+        api_logger.info(f"New user registered: {new_user.username} (role: {role})")
+
+        return {
+            "message": "User registered successfully",
+            "username": new_user.username,
+            "role": new_user.role
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"Registration error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to register user. Please try again."
+        )
+
+
+@app.post("/auth/login", response_model=TokenResponseSchema, tags=["Auth"])
+def login(user_data: UserLoginSchema, db: Session = Depends(get_db)):
+    """
+    Authenticates a user and returns a JWT token.
+    """
+    user = db.query(User).filter(User.username == user_data.username).first()
+
+    if not user:
+        api_logger.warning(
+            f"Failed login attempt: username='{user_data.username}' "
+            f"(user not found)"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password",
+        )
+
+    if not verify_password(user_data.password, user.password_hash):
+        api_logger.warning(
+            f"Failed login attempt: username='{user_data.username}' "
+            f"(wrong password)"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    access_token = create_access_token(
+        data={"sub": user.username, "role": user.role, "id": user.id},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+
+    api_logger.info(f"Successful login: username='{user.username}' role='{user.role}'")
+
+    return TokenResponseSchema(access_token=access_token, token_type="bearer")
+
+
+@app.get("/auth/me", tags=["Auth"])
+def get_me(current_user: User = Depends(get_current_user)):
+    return {
+        "id" : current_user.id,
+        "username": current_user.username,
+        "role" : current_user.role,
+        "message" : f"Hello, {current_user.username}!"
+    }
+
+@app.get("/admin/dashboard", tags=["Admin"])
+def admin_dashboard(current_user: User = require_admin):
+    return {
+        "message" : f"Welcome, {current_user.username}!",
+        "role" : current_user.role,
+        "access_level" : "full",
+        "available_actions": [
+            "View all Users", "Process sales Data",
+            "Delete records", "View all reports"
+        ]
+    }
+
+
+@app.get("/admin/users", tags=["Admin"])
+def list_all_users(
+    current_user: User = require_admin,
+    db: Session = Depends(get_db)
+):
+    """Returns all users. Never includes password_hash."""
+    try:
+        users = db.query(User).all()
+        return {
+            "total_users": len(users),
+            "users": [
+                {
+                    "id": u.id,
+                    "username": u.username,
+                    "role": u.role,
+                    "created_at": u.created_at.isoformat() if u.created_at else None
+                }
+                for u in users
+            ]
+        }
+    except Exception as e:
+        api_logger.error(f"Failed to list users: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve users."
+        )
+
+@app.patch("/admin/users/{user_id}/role", tags=["Admin"])
+def update_user_role(
+    user_id: int,
+    role_data: RoleUpdateSchema,
+    current_user: User = require_admin,
+    db: Session = Depends(get_db)
+):
+    """Changes a user's role. Admins cannot change their own role."""
+    try:
+        if user_id == current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot change your own role. Ask another admin."
+            )
+
+        target = db.query(User).filter(User.id == user_id).first()
+        if not target:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with ID {user_id} not found."
+            )
+
+        old_role = target.role
+        target.role = role_data.role
+        db.commit()
+        db.refresh(target)
+
+        api_logger.info(
+            f"Role change: admin='{current_user.username}' "
+            f"changed '{target.username}' from '{old_role}' to '{role_data.role}'"
+        )
+
+        return {
+            "message": (
+                f"Changed '{target.username}' from '{old_role}' to '{role_data.role}'"
+            ),
+            "user": {
+                "id": target.id,
+                "username": target.username,
+                "role": target.role,
+                "created_at": target.created_at.isoformat() if target.created_at else None
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"Role update error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update role.")
+
+@app.patch("/admin/promote/{username}", tags=["Admin"])
+def promote_to_admin(
+    username: str,
+    current_user: User = require_admin,
+    db: Session = Depends(get_db)
+):
+    """Promotes a user to admin by username."""
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User '{username}' not found.")
+    if user.role == "admin":
+        return {"message": f"'{username}' is already an admin."}
+    user.role = "admin"
+    db.commit()
+    db.refresh(user)
+    return {"message": f"Promoted '{username}' to admin.", "role": user.role}
+
+@app.get("/viewer/data", tags=["Viewer"])
+def viewer_data(current_user: User = require_viewer):
+    return {
+        "message": f"Welcome, {current_user.username}!",
+        "role": current_user.role,
+        "access_level": "read_only"
+    }
+
+@app.get("/viewer/summary", tags=["Viewer"])
+def viewer_summary(current_user: User = require_viewer):
+    return {
+        "message": "Sales summary",
+        "accessed_by": current_user.username,
+        "placeholder_stats": {
+            "total_sales": 0,
+            "total_revenue": 0.0,
+            "pending_records": 0,
+            "processed_records": 0
+        }
+    }
+
+@app.get("/me", tags=["User"])
+def get_me_route(current_user: User = Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "role": current_user.role
+    }
+
+REQUIRED_CSV_COLUMNS = {"date", "product", "category", "qty", "price"}
+
+
+@app.post(
+    "/sales/upload-manual",
+    response_model=RawSaleResponse,
+    tags=["Sales"],
+    status_code=status.HTTP_201_CREATED
+)
+def upload_manual_sale(
+    sale_data: RawSaleCreate,
+    current_user: User = require_admin,
+    db: Session = Depends(get_db)
+):
+    """Adds a single sale record manually. Admin only."""
+    try:
         new_sale = RawSale(
-            date=datetime.combine(sale_data.date,datetime.min.time()),
-            product=sale_data.product,
-            category=sale_data.category,
-            qty=sale_data.qty,
-            price=sale_data.price,
-            uploaded_by=current_user.id,
-            status="pending"
+            date = datetime.combine(sale_data.date, datetime.min.time()),
+            product = sale_data.product,
+            category = sale_data.category,
+            qty = sale_data.qty,
+            price = sale_data.price,
+            uploaded_by = current_user.id,
+            status= "pending"
         )
         db.add(new_sale)
         db.commit()
         db.refresh(new_sale)
-        
         return new_sale
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save the sale record. Error: {str(e)}"
-        )
-        
-@app.post("/sales/upload-csv",response_model=CSVUploadResponse,tags=["Sales"],status_code=status.HTTP_201_CREATED)
-async def upload_csv(file:UploadFile=File(...),current_user:User=require_admin,db:Session=Depends(get_db)):
-    """
-    Upload multiple Sales records via CSV Files.
-    Admin ONLY.
-    """
-    if not file.filename.endswith(".csv"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only CSV Files are supported."
-        )
-        
-    try:
-        contents=await file.read()
-        if len(contents)==0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File is empty."
-            )
-        df=pd.read_csv(io.BytesIO(contents))
-        
+
     except HTTPException:
         raise
     except Exception as e:
+        db.rollback()
+        api_logger.error(f"Manual upload error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Could not read the CSV File. Error: {str(e)}"
+            status_code=500,
+            detail="Failed to save sale record. Please try again."
         )
-    
-    df.columns = df.columns.str.strip().str.lower()
-    actual_columns = set(df.columns)
-    missing_columns = REQUIRED_CSV_COLUMNS - actual_columns
-    
-    if missing_columns:
+
+
+@app.post(
+    "/sales/upload-csv",
+    response_model=CSVUploadResponse,
+    tags=["Sales"],
+    status_code=status.HTTP_201_CREATED
+)
+async def upload_csv(
+    file: UploadFile = File(...),
+    current_user: User = require_admin,
+    db: Session = Depends(get_db)
+):
+    """Uploads multiple sale records via CSV. Admin only."""
+
+    if not file.filename.endswith(".csv"):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=400,
+            detail="Only .csv files are accepted."
+        )
+
+    try:
+        contents = await file.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
+
+    if not contents or len(contents) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file is empty."
+        )
+
+    try:
+        df = pd.read_csv(io.BytesIO(contents))
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not parse CSV. Make sure it is a valid CSV file. Error: {str(e)}"
+        )
+
+    df.columns = df.columns.str.strip().str.lower()
+    missing_cols = REQUIRED_CSV_COLUMNS - set(df.columns)
+    if missing_cols:
+        raise HTTPException(
+            status_code=400,
             detail=(
-                f"CSV is missing required columns: {sorted(missing_columns)}. "
-                f"Required columns are: {sorted(REQUIRED_CSV_COLUMNS)}. "
-                f"Found columns: {sorted(actual_columns)}."
+                f"Missing required columns: {sorted(missing_cols)}. "
+                f"Required: {sorted(REQUIRED_CSV_COLUMNS)}. "
+                f"Found: {sorted(df.columns.tolist())}."
             )
         )
-    
-    if len(df)==0:
+
+    if len(df) == 0:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="CSV File has no data rows(only headers found)."
+            status_code=400,
+            detail="CSV has headers but no data rows."
         )
-        
+
     inserted = 0
-    skipped = 0
-    total_rows = len(df)
-    
-    for index,row in df.iterrows():
+    skipped  = 0
+    total = len(df)
+
+    for idx, row in df.iterrows():
         try:
-            raw_date_value = str(row["date"]).strip()
+            raw_date = str(row["date"]).strip()
             try:
-                parsed_date = pd.to_datetime(raw_date_value)
-                sale_datetime = parsed_date.to_pydatetime()
+                parsed_date = pd.to_datetime(raw_date)
+                sale_dt     = parsed_date.to_pydatetime()
             except Exception:
-                print(f"Row {index+1}: Invalid Date '{raw_date_value}' -skipping")
-                skipped+=1
-                continue
-            
-            product = str(row["product"]).strip()
-            if not product or product.lower()=="nan":
-                print(f"Row {index+1} has no product- skipping.")
-                skipped+=1
-                continue
-            
-            category = str(row["category"])
-            if not category or category.lower() == "nan":
-                print(f"  Row {index + 1}: Empty category — skipping")
                 skipped += 1
                 continue
-            
+
+            product = str(row["product"]).strip()
+            if not product or product.lower() == "nan":
+                skipped += 1
+                continue
+
+            category = str(row["category"]).strip()
+            if not category or category.lower() == "nan":
+                skipped += 1
+                continue
+
+            product  = product[:100]
+            category = category[:50]
+
             try:
                 qty = int(float(str(row["qty"]).strip()))
                 if qty <= 0:
-                    raise ValueError("qty must be > 0")
+                    raise ValueError("qty <= 0")
             except Exception:
-                print(f"  Row {index + 1}: Invalid qty '{row['qty']}' — skipping")
                 skipped += 1
                 continue
 
             try:
                 price = float(str(row["price"]).strip())
                 if price <= 0:
-                    raise ValueError("price must be > 0")
+                    raise ValueError("price <= 0")
             except Exception:
-                print(f"  Row {index + 1}: Invalid price '{row['price']}' — skipping")
                 skipped += 1
                 continue
-            
-            new_sale = RawSale(
-                date=sale_datetime,
-                product=product,
-                category=category,
-                qty=qty,
-                price=price,
-                uploaded_by=current_user.id,
-                status="pending"
-            )
-            db.add(new_sale)
-            inserted+=1
-        except Exception as e:
-            print(f"Row {index+1}: Unexpected Error- {str(e)} -skipping")
-            skipped+=1
+
+            db.add(RawSale(
+                date = sale_dt,
+                product = product,
+                category = category,
+                qty = qty,
+                price = price,
+                uploaded_by = current_user.id,
+                status = "pending"
+            ))
+            inserted += 1
+
+        except Exception:
+            skipped += 1
             continue
-    
-    if inserted>0:
+
+    if inserted > 0:
         try:
             db.commit()
         except Exception as e:
             db.rollback()
+            api_logger.error(f"CSV bulk insert failed: {e}")
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save records to database. Error: {str(e)}"
+                status_code=500,
+                detail="Failed to save records to database."
             )
-            
-    return CSVUploadResponse(
-        message=f"CSV upload Complete. {inserted} rows inserted, {skipped} rows skipped",
-        inserted=inserted,
-        skipped=skipped,
-        total_rows=total_rows
+
+    api_logger.info(
+        f"CSV upload by '{current_user.username}': "
+        f"{inserted} inserted, {skipped} skipped, {total} total"
     )
-    
-@app.get("/sales/raw",response_model=List[RawSaleResponse],tags=["Sales"])
-def get_raw_sales(status_filter: Optional[str]=Query(
-    default=None,
-    alias="status",
-    description="Filter by status: pending,processed or failed"
-    ),
-    current_user:User=require_viewer,
-    db:Session=Depends(get_db)):
-    """
-    Get all raw sales record.
-    """
+
+    return CSVUploadResponse(
+        message = f"Upload complete: {inserted} inserted, {skipped} skipped.",
+        inserted = inserted,
+        skipped = skipped,
+        total_rows = total
+    )
+
+
+@app.get("/sales/raw", response_model=List[RawSaleResponse], tags=["Sales"])
+def get_raw_sales(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """Returns raw sales with optional status filter."""
     try:
-        query=db.query(RawSale)
-        valid_statuses = ["pending","processed","failed"]
+        query = db.query(RawSale)
+        valid_statuses = ["pending", "processed", "failed"]
         if status_filter:
             if status_filter.lower() not in valid_statuses:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid status '{status_filter}'. Must be one of: {valid_statuses}"
+                    status_code=400,
+                    detail=f"Invalid status '{status_filter}'. Must be one of {valid_statuses}."
                 )
-            query = query.filter(RawSale.status==status_filter.lower())
-        sales = query.order_by(RawSale.created_at.desc()).all()
-        return sales
+            query = query.filter(RawSale.status == status_filter.lower())
+        return query.order_by(RawSale.created_at.desc()).all()
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch raw sales. Error: {str(e)}"
-        )
-        
-@app.get("/sales/raw/{sale_id}",response_model=RawSaleResponse,tags=["Sales"])
-def get_raw_sale_by_id(sale_id:int, current_user:User=require_viewer,db:Session=Depends(get_db)):
-    "Get a single record by sale_id"
+        api_logger.error(f"get_raw_sales error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch raw sales.")
+
+
+@app.get(
+    "/sales/raw/{sale_id}",
+    response_model=RawSaleResponse,
+    tags=["Sales"]
+)
+def get_raw_sale_by_id(
+    sale_id: int,
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """Returns a single raw sale by ID. 404 if not found."""
+    sale = db.query(RawSale).filter(RawSale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail=f"Sale ID {sale_id} not found.")
+    return sale
+
+
+@app.get(
+    "/sales/processed",
+    response_model=List[ProcessedSaleResponse],
+    tags=["Sales"]
+)
+def get_processed_sales(
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """Returns all processed sales ordered by most recent first."""
     try:
-        sale = db.query(RawSale).filter(RawSale.id==sale_id).first()
-        if sale is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Raw Sale with ID {sale_id} not found."
-            )
-        return sale
-    except HTTPException:
-        raise
+        return db.query(ProcessedSale).order_by(
+            ProcessedSale.processed_at.desc()
+        ).all()
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch sale with ID {sale_id}. Error: {str(e)}"
-        )
-        
-@app.get("/sales/processed",response_model=List[ProccessedSaleResponse],tags=["Sales"])
-def get_processed_sales(current_user:User=require_viewer,db:Session=Depends(get_db)):
-    "Get all processed sales record"
-    try:
-        sales = db.query(ProcessedSale).order_by(ProcessedSale.processed_at.desc()).all()
-        return sales
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch processed sales. Error: {str(e)}"
-        )
-        
-@app.post("/pipeline/run",tags=["Pipeline"])
+        api_logger.error(f"get_processed_sales error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch processed sales.")
+
+@app.post("/pipeline/run", tags=["Pipeline"])
 def trigger_pipeline(
     current_user: User = require_admin,
     db: Session = Depends(get_db)
 ):
-    try:
-        logger.info(
-            f"Pipeline triggered by user: {current_user.username} "
-            f"(role: {current_user.role})"
+    """
+    Triggers the full ETL pipeline.
+    Returns 409 if pipeline is already running.
+    Admin only.
+    """
+    lock_acquired = _acquire_pipeline_lock(db, current_user.username)
+    if not lock_acquired:
+        status_row = db.query(PipelineStatus).filter(
+            PipelineStatus.id == 1
+        ).first()
+        locked_by = status_row.locked_by if status_row else "unknown"
+        started = status_row.started_at if status_row else None
+        started_str = started.strftime("%H:%M:%S") if started else "unknown time"
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Pipeline is already running "
+                f"(triggered by '{locked_by}' at {started_str}). "
+                "Please wait for it to complete."
+            )
         )
 
+    try:
+        pipe_logger.info(f"Pipeline triggered by: {current_user.username}")
         summary = run_pipeline(db)
-        
+
+        # Save run to history
+        db.add(PipelineRun(
+            total_loaded = summary.get("total_loaded", 0),
+            processed = summary.get("processed", 0),
+            failed = summary.get("failed", 0),
+            skipped_duplicates = summary.get("skipped_duplicates", 0),
+            total_revenue= summary.get("total_revenue", 0.0),
+            tax_collected= summary.get("tax_collected", 0.0),
+            triggered_by= current_user.username
+        ))
+        db.commit()
+
         return {
-            "triggered_by" : current_user.username,
-            "total_loaded" : summary["total_loaded"],
-            "processed" : summary["processed"],
-            "failed" : summary["failed"],
-            "skipped_duplicates" : summary["skipped_duplicates"],
-            "tax_collected" : summary["tax_collected"],
-            "total_revenue" : summary["total_revenue"],
-            "message" : summary["message"]
+            "triggered_by": current_user.username,
+            "total_loaded": summary.get("total_loaded", 0),
+            "processed": summary.get("processed", 0),
+            "failed": summary.get("failed", 0),
+            "skipped_duplicates": summary.get("skipped_duplicates", 0),
+            "tax_collected": summary.get("tax_collected", 0.0),
+            "total_revenue": summary.get("total_revenue", 0.0),
+            "message": summary.get("message", "Pipeline complete.")
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Pipeline crashed: {e}")
+        pipe_logger.error(f"Pipeline crashed: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Pipeline failed: {str(e)}"
+            status_code=500,
+            detail="Pipeline failed. Check pipeline.log for details."
         )
-import logging
-logger = logging.getLogger("pipeline")
+    finally:
+        _release_pipeline_lock(db)
+        
+@app.get("/pipeline/history", tags=["Pipeline"])
+def get_pipeline_history(
+    limit: int = Query(default=10, ge=1, le=100),
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """Returns the last N pipeline run records."""
+    try:
+        runs = (
+            db.query(PipelineRun)
+            .order_by(PipelineRun.run_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "run_at": r.run_at.isoformat() if r.run_at else None,
+                "total_loaded": r.total_loaded,
+                "processed": r.processed,
+                "failed": r.failed,
+                "skipped_duplicates": r.skipped_duplicates,
+                "total_revenue": r.total_revenue,
+                "tax_collected": r.tax_collected,
+                "triggered_by": r.triggered_by
+            }
+            for r in runs
+        ]
+    except Exception as e:
+        api_logger.error(f"pipeline history error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch pipeline history.")
+
+
+@app.get("/pipeline/status", tags=["Pipeline"])
+def get_pipeline_status(
+    current_user: User = require_viewer,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns whether the pipeline is currently running.
+    Useful for frontend to poll and show a "pipeline busy" state.
+    """
+    _ensure_pipeline_status(db)
+    status_row = db.query(PipelineStatus).filter(
+        PipelineStatus.id == 1
+    ).first()
+
+    return {
+        "is_running": bool(status_row.is_running),
+        "locked_by": status_row.locked_by,
+        "started_at": (
+            status_row.started_at.isoformat()
+            if status_row.started_at else None
+        )
+    }
 
 @app.get("/dashboard/summary", tags=["Dashboard"])
 def get_dashboard_summary(
     current_user: User = require_viewer,
     db: Session = Depends(get_db)
 ):
-    """
-    Returns KPI summary metrics from processed_sales.
-    """
+    """Returns KPI summary metrics from processed_sales."""
     try:
         result = db.query(
             func.sum(ProcessedSale.final_amount).label("total_revenue"),
@@ -445,17 +792,12 @@ def get_dashboard_summary(
             "total_orders": int(result.total_orders or 0),
             "avg_order_value": round(float(result.avg_order_value or 0), 2),
             "last_updated": (
-                result.last_updated.isoformat()
-                if result.last_updated
-                else None
+                result.last_updated.isoformat() if result.last_updated else None
             )
         }
-
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch dashboard summary: {str(e)}"
-        )
+        api_logger.error(f"dashboard summary error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch dashboard summary.")
 
 
 @app.get("/dashboard/revenue-trend", tags=["Dashboard"])
@@ -465,53 +807,55 @@ def get_revenue_trend(
     current_user: User = require_viewer,
     db: Session = Depends(get_db)
 ):
+    """Returns daily revenue grouped by date with optional date filters."""
     try:
         from datetime import timedelta
 
-        sale_date_expr = func.date(RawSale.date).label("sale_date")
-
         query = db.query(
-            sale_date_expr,
+            cast(RawSale.date, Date).label("sale_date"),
             func.sum(ProcessedSale.final_amount).label("revenue"),
             func.count(ProcessedSale.id).label("order_count")
         ).join(
-            RawSale,
-            ProcessedSale.raw_id == RawSale.id
-        ).group_by(sale_date_expr)
+            RawSale, ProcessedSale.raw_id == RawSale.id
+        ).group_by(
+            cast(RawSale.date, Date)
+        )
 
         if start_date:
-            start_date_clean = start_date.strip().split("T")[0].split(" ")[0]
-            start_dt = datetime.strptime(start_date_clean, "%Y-%m-%d")
-            query = query.filter(RawSale.date >= start_dt)
+            try:
+                clean = start_date.strip().split("T")[0].split(" ")[0]
+                start_dt = datetime.strptime(clean, "%Y-%m-%d")
+                query = query.filter(RawSale.date >= start_dt)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid start_date '{start_date}'. Use YYYY-MM-DD."
+                )
 
         if end_date:
-            end_date_clean = end_date.strip().split("T")[0].split(" ")[0]
-            end_dt = datetime.strptime(end_date_clean, "%Y-%m-%d")
-            end_dt_inclusive = end_dt + timedelta(days=1)
-            query = query.filter(RawSale.date < end_dt_inclusive)
+            try:
+                clean = end_date.strip().split("T")[0].split(" ")[0]
+                end_dt = datetime.strptime(clean, "%Y-%m-%d") + timedelta(days=1)
+                query = query.filter(RawSale.date < end_dt)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid end_date '{end_date}'. Use YYYY-MM-DD."
+                )
 
-        results = query.order_by(sale_date_expr).all()
+        results = query.order_by("sale_date").all()
         trend_data = []
         for row in results:
-        
-            sale_date_val = row.sale_date
-
-            if sale_date_val is None:
+            val = row.sale_date
+            if val is None:
                 continue
-            
-
-            if isinstance(sale_date_val, str):
-                date_str = sale_date_val.split("T")[0].split(" ")[0]
-
-            elif hasattr(sale_date_val, "strftime"):
-                date_str = sale_date_val.strftime("%Y-%m-%d")
-
-            else:
-                date_str = str(sale_date_val).split("T")[0].split(" ")[0]
-
+            date_str = (
+                val.strftime("%Y-%m-%d") if hasattr(val, "strftime")
+                else str(val).split("T")[0].split(" ")[0]
+            )
             trend_data.append({
-                "date"       : date_str,
-                "revenue"    : round(float(row.revenue or 0), 2),
+                "date": date_str,
+                "revenue": round(float(row.revenue or 0), 2),
                 "order_count": int(row.order_count or 0)
             })
 
@@ -520,25 +864,19 @@ def get_revenue_trend(
     except HTTPException:
         raise
     except Exception as e:
+        api_logger.error(f"revenue trend error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=f"Failed to fetch revenue trend: {str(e)}"
         )
- 
+
 @app.get("/dashboard/top-products", tags=["Dashboard"])
 def get_top_products(
-    limit: int = Query(
-        default=10,
-        ge=1,
-        le=50,
-        description="Number of top products to return (default 10, max 50)"
-    ),
+    limit: int = Query(default=10, ge=1, le=50),
     current_user: User = require_viewer,
     db: Session = Depends(get_db)
 ):
-    """
-    Returns top N products ranked by total revenue.
-    """
+    """Returns top N products by revenue."""
     try:
         results = db.query(
             RawSale.product.label("product"),
@@ -546,29 +884,25 @@ def get_top_products(
             func.sum(ProcessedSale.final_amount).label("revenue"),
             func.sum(RawSale.qty).label("units_sold")
         ).join(
-            RawSale,
-            ProcessedSale.raw_id == RawSale.id
+            RawSale, ProcessedSale.raw_id == RawSale.id
         ).group_by(
-            RawSale.product,
-            RawSale.category
+            RawSale.product, RawSale.category
         ).order_by(
             func.sum(ProcessedSale.final_amount).desc()
         ).limit(limit).all()
+
         return [
             {
-                "product" : row.product or "Unknown",    
-                "category" : row.category or "Uncategorized",
-                "revenue" : round(float(row.revenue or 0), 2),
-                "units_sold" : int(row.units_sold or 0)
+                "product": row.product or "Unknown",
+                "category": row.category or "Uncategorized",
+                "revenue": round(float(row.revenue or 0), 2),
+                "units_sold": int(row.units_sold or 0)
             }
             for row in results
         ]
-
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch top products: {str(e)}"
-        )
+        api_logger.error(f"top products error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch top products.")
 
 
 @app.get("/dashboard/category-breakdown", tags=["Dashboard"])
@@ -576,17 +910,14 @@ def get_category_breakdown(
     current_user: User = require_viewer,
     db: Session = Depends(get_db)
 ):
-    """
-    Returns revenue breakdown by product category with percentages.
-    """
+    """Returns revenue per category with percentage of total."""
     try:
         results = db.query(
             RawSale.category.label("category"),
             func.sum(ProcessedSale.final_amount).label("revenue"),
             func.count(ProcessedSale.id).label("order_count")
         ).join(
-            RawSale,
-            ProcessedSale.raw_id == RawSale.id
+            RawSale, ProcessedSale.raw_id == RawSale.id
         ).group_by(
             RawSale.category
         ).order_by(
@@ -595,169 +926,20 @@ def get_category_breakdown(
 
         if not results:
             return []
-        total_revenue = sum(
-            float(row.revenue or 0) for row in results
-        )        
-        breakdown = []
-        for row in results:
-            revenue = round(float(row.revenue or 0), 2)
-            if total_revenue > 0:
-                percentage = round((revenue / total_revenue) * 100, 2)                
-            else:
-                percentage = 0.0
 
-            breakdown.append({
-                "category" : row.category or "Uncategorized",
-                "revenue" : revenue,
-                "order_count": int(row.order_count or 0),
-                "percentage" : percentage
-            })
-
-        return breakdown
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch category breakdown: {str(e)}"
-        )
-        
-class RoleUpdateSchema(BaseModel):
-    """Request body for changing a user's role."""
-    role: str = Field(..., description="New role: 'admin' or 'viewer'")
-
-@app.patch("/admin/users/{user_id}/role", tags=["Admin"])
-def update_user_role(
-    user_id: int,
-    role_data: RoleUpdateSchema,
-    current_user: User = require_admin,
-    db: Session = Depends(get_db)
-):
-    """
-    Changes the role of a user by their ID.
-    Admin only.
-    """
-    allowed_roles = ["admin", "viewer"]
-    if role_data.role not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role '{role_data.role}'. Must be one of: {allowed_roles}"
-        )
-
-    if user_id == current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot change your own role. Ask another admin."
-        )
-
-    target_user = db.query(User).filter(User.id == user_id).first()
-    if not target_user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User with ID {user_id} not found."
-        )
-
-    old_role = target_user.role
-    target_user.role = role_data.role
-    db.commit()
-    db.refresh(target_user)
-
-    logger.info(
-        f"Admin '{current_user.username}' changed "
-        f"'{target_user.username}' role: {old_role} → {role_data.role}"
-    )
-
-    return {
-        "message": (
-            f"Successfully changed '{target_user.username}' "
-            f"from '{old_role}' to '{role_data.role}'"
-        ),
-        "user": {
-            "id" : target_user.id,
-            "username" : target_user.username,
-            "role" : target_user.role,
-            "created_at" : target_user.created_at.isoformat()
-                          if target_user.created_at else None
-        }
-    }
-
-@app.get("/pipeline/history", tags=["Pipeline"])
-def get_pipeline_history(
-    limit: int = Query(default=10, ge=1, le=100),
-    current_user: User = require_viewer,
-    db: Session = Depends(get_db)
-):
-    """
-    Returns the last N pipeline runs ordered by most recent first.
-    Viewer and above.
-    """
-    try:
-        runs = (
-            db.query(PipelineRun)
-            .order_by(PipelineRun.run_at.desc())
-            .limit(limit)
-            .all()
-        )
-
+        total_revenue = sum(float(r.revenue or 0) for r in results)
         return [
             {
-                "id" : r.id,
-                "run_at" : r.run_at.isoformat() if r.run_at else None,
-                "total_loaded" : r.total_loaded,
-                "processed" : r.processed,
-                "failed" : r.failed,
-                "skipped_duplicates" : r.skipped_duplicates,
-                "total_revenue" : r.total_revenue,
-                "tax_collected" : r.tax_collected,
-                "triggered_by" : r.triggered_by
+                "category": row.category or "Uncategorized",
+                "revenue": round(float(row.revenue or 0), 2),
+                "order_count": int(row.order_count or 0),
+                "percentage": (
+                    round((float(row.revenue or 0) / total_revenue) * 100, 2)
+                    if total_revenue > 0 else 0.0
+                )
             }
-            for r in runs
+            for row in results
         ]
-
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch pipeline history: {str(e)}"
-        )
-
-@app.post("/pipeline/run", tags=["Pipeline"])
-def trigger_pipeline(
-    current_user: User = require_admin,
-    db: Session = Depends(get_db)
-):
-    """
-    Triggers the full ETL pipeline and records the run in pipeline_runs.
-    Admin only.
-    """
-    try:
-        logger.info(f"Pipeline triggered by: {current_user.username}")
-        summary = run_pipeline(db)
-
-        pipeline_run = PipelineRun(
-            total_loaded = summary.get("total_loaded", 0),
-            processed = summary.get("processed", 0),
-            failed = summary.get("failed", 0),
-            skipped_duplicates= summary.get("skipped_duplicates", 0),
-            total_revenue = summary.get("total_revenue", 0.0),
-            tax_collected = summary.get("tax_collected", 0.0),
-            triggered_by = current_user.username
-        )
-        db.add(pipeline_run)
-        db.commit()
-        
-        return {
-            "triggered_by": current_user.username,
-            "total_loaded": summary.get("total_loaded", 0),
-            "processed": summary.get("processed", 0),
-            "failed": summary.get("failed", 0),
-            "skipped_duplicates": summary.get("skipped_duplicates", 0),
-            "tax_collected": summary.get("tax_collected", 0.0),
-            "total_revenue": summary.get("total_revenue", 0.0),
-            "message": summary.get("message", "Pipeline complete.")
-        }
-
-    except Exception as e:
-        logger.error(f"Pipeline crashed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Pipeline failed: {str(e)}"
-        )
+        api_logger.error(f"category breakdown error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch category breakdown.")

@@ -1,0 +1,35 @@
+2026-07-09 23:49:30 | INFO     | GET / | 200 | 6.8ms | client=127.0.0.1
+2026-07-09 23:49:30 | INFO     | Successful login: username='admin' role='admin'
+2026-07-09 23:49:30 | INFO     | POST /auth/login | 200 | 240.6ms | client=127.0.0.1
+2026-07-09 23:49:30 | WARNING  | POST /auth/register | 422 | 0.0ms | client=127.0.0.1
+2026-07-09 23:49:31 | WARNING  | POST /auth/register | 422 | 0.0ms | client=127.0.0.1
+2026-07-09 23:49:31 | WARNING  | POST /auth/register | 422 | 2.4ms | client=127.0.0.1
+2026-07-09 23:49:31 | WARNING  | POST /auth/register | 422 | 0.0ms | client=127.0.0.1
+2026-07-09 23:49:31 | WARNING  | Failed login attempt: username='admin' (wrong password)
+2026-07-09 23:49:31 | WARNING  | POST /auth/login | 401 | 205.2ms | client=127.0.0.1
+2026-07-09 23:49:32 | WARNING  | Failed login attempt: username='ghost_user_xyz' (user not found)
+2026-07-09 23:49:32 | WARNING  | POST /auth/login | 401 | 0.0ms | client=127.0.0.1
+2026-07-09 23:49:32 | WARNING  | GET /sales/raw | 401 | 1.0ms | client=127.0.0.1
+2026-07-09 23:49:32 | WARNING  | GET /sales/raw | 401 | 1.2ms | client=127.0.0.1
+2026-07-09 23:49:33 | INFO     | Successful login: username='viewer' role='viewer'
+2026-07-09 23:49:33 | INFO     | POST /auth/login | 200 | 276.5ms | client=127.0.0.1
+2026-07-09 23:49:33 | WARNING  | POST /pipeline/run | 403 | 2.1ms | client=127.0.0.1
+2026-07-09 23:49:33 | WARNING  | POST /sales/upload-csv | 400 | 6.0ms | client=127.0.0.1
+2026-07-09 23:49:34 | WARNING  | POST /sales/upload-csv | 400 | 44.1ms | client=127.0.0.1
+2026-07-09 23:49:34 | WARNING  | POST /sales/upload-csv | 400 | 7.0ms | client=127.0.0.1
+2026-07-09 23:49:35 | INFO     | CSV upload by 'admin': 1 inserted, 0 skipped, 1 total
+2026-07-09 23:49:35 | INFO     | POST /sales/upload-csv | 201 | 25.3ms | client=127.0.0.1
+2026-07-09 23:49:35 | INFO     | CSV upload by 'admin': 0 inserted, 1 skipped, 1 total
+2026-07-09 23:49:35 | INFO     | POST /sales/upload-csv | 201 | 0.0ms | client=127.0.0.1
+2026-07-09 23:49:36 | INFO     | CSV upload by 'admin': 2 inserted, 0 skipped, 2 total
+2026-07-09 23:49:36 | INFO     | POST /sales/upload-csv | 201 | 12.5ms | client=127.0.0.1
+2026-07-09 23:49:36 | WARNING  | POST /sales/upload-csv | 400 | 0.0ms | client=127.0.0.1
+2026-07-09 23:49:36 | INFO     | POST /pipeline/run | 200 | 125.0ms | client=127.0.0.1
+2026-07-09 23:49:37 | INFO     | GET /pipeline/status | 200 | 4.7ms | client=127.0.0.1
+2026-07-09 23:49:37 | INFO     | GET /dashboard/summary | 200 | 8.0ms | client=127.0.0.1
+2026-07-09 23:49:38 | ERROR    | revenue trend error: fromisoformat: argument must be str
+2026-07-09 23:49:38 | WARNING  | GET /dashboard/revenue-trend | 500 | 0.0ms | client=127.0.0.1
+2026-07-09 23:49:38 | WARNING  | GET /dashboard/revenue-trend | 400 | 3.6ms | client=127.0.0.1
+2026-07-09 23:49:38 | INFO     | GET /dashboard/revenue-trend | 200 | 6.8ms | client=127.0.0.1
+2026-07-09 23:49:39 | INFO     | GET /dashboard/top-products | 200 | 6.0ms | client=127.0.0.1
+2026-07-09 23:49:39 | INFO     | GET /dashboard/category-breakdown | 200 | 0.0ms | client=127.0.0.1
