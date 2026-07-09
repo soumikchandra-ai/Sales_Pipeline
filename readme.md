@@ -59,9 +59,11 @@ sales_pipeline/
 │   └── pipeline.log
 │
 ├── seed.py
+├── test_edge_cases.py
+├── test_pipeline.py
 ├── requirements.txt
 ├── .env
-└── README.md
+└── readme.md
 ```
 
 ---
@@ -71,7 +73,7 @@ sales_pipeline/
 ### Clone Repository
 
 ```bash
-git clone https://github.com/yourusername/sales_pipeline.git
+git clone https://github.com/soumikchandra-ai/Sales_Pipeline.git
 
 cd sales_pipeline
 ```
@@ -224,7 +226,7 @@ The dashboard provides:
 Authenticate using JWT-based login.
 
 <p align="center">
-  <img src="Screenshots\Login.png" alt="Login Page" width="850">
+  <img src="Screenshots/Login.png" alt="Login Page" width="850">
 </p>
 
 ---
@@ -234,7 +236,7 @@ Authenticate using JWT-based login.
 Create a new user account with role selection.
 
 <p align="center">
-  <img src="Screenshots\Register.png" alt="Registration Page" width="850">
+  <img src="Screenshots/Register.png" alt="Registration Page" width="850">
 </p>
 
 ---
@@ -244,7 +246,7 @@ Create a new user account with role selection.
 Upload sales records through CSV files or manually enter records.
 
 <p align="center">
-  <img src="Screenshots\Upload.png" alt="Upload Page" width="850">
+  <img src="Screenshots/Upload.png" alt="Upload Page" width="850">
 </p>
 
 ---
@@ -254,7 +256,7 @@ Upload sales records through CSV files or manually enter records.
 Run the ETL pipeline to clean, validate, and transform uploaded data.
 
 <p align="center">
-  <img src="Screenshots\Pipeline.png" alt="Pipeline Page" width="850">
+  <img src="Screenshots/Pipeline.png" alt="Pipeline Page" width="850">
 </p>
 
 ---
@@ -264,7 +266,7 @@ Run the ETL pipeline to clean, validate, and transform uploaded data.
 View key business metrics including revenue, orders, and average order value.
 
 <p align="center">
-  <img src="Screenshots\Dashboard.png" alt="Dashboard" width="850">
+  <img src="Screenshots/Dashboard.png" alt="Dashboard" width="850">
 </p>
 
 ---
@@ -274,7 +276,7 @@ View key business metrics including revenue, orders, and average order value.
 Manage users and role-based access.
 
 <p align="center">
-  <img src="Screenshots\Admin_Panel.png" alt="Admin Panel" width="850">
+  <img src="Screenshots/Admin_Panel.png" alt="Admin Panel" width="850">
 </p>
 
 ---
@@ -314,22 +316,3 @@ GET /dashboard/category-breakdown
 ```
 
 ---
-
-##  Future Improvements
-
-- PostgreSQL Support
-- Docker Deployment
-- CI/CD Pipeline
-- Scheduled ETL Jobs
-- Email Notifications
-- Cloud Deployment (AWS/Azure)
-
----
-
-##  License
-
-This project is intended for educational and portfolio purposes.
-
----
-
-##  If you found this project useful, consider giving it a star!
