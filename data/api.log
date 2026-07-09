@@ -33,3 +33,48 @@
 2026-07-09 23:49:38 | INFO     | GET /dashboard/revenue-trend | 200 | 6.8ms | client=127.0.0.1
 2026-07-09 23:49:39 | INFO     | GET /dashboard/top-products | 200 | 6.0ms | client=127.0.0.1
 2026-07-09 23:49:39 | INFO     | GET /dashboard/category-breakdown | 200 | 0.0ms | client=127.0.0.1
+2026-07-10 00:10:31 | INFO     | Successful login: username='peterparker' role='admin'
+2026-07-10 00:10:31 | INFO     | POST /auth/login | 200 | 567.4ms | client=127.0.0.1
+2026-07-10 00:10:32 | INFO     | GET /auth/me | 200 | 11.1ms | client=127.0.0.1
+2026-07-10 00:10:33 | INFO     | GET /dashboard/summary | 200 | 19.9ms | client=127.0.0.1
+2026-07-10 00:10:34 | INFO     | GET /pipeline/history | 200 | 45.3ms | client=127.0.0.1
+2026-07-10 00:10:35 | ERROR    | revenue trend error: fromisoformat: argument must be str
+2026-07-10 00:10:35 | WARNING  | GET /dashboard/revenue-trend | 500 | 11.4ms | client=127.0.0.1
+2026-07-10 00:10:36 | INFO     | GET /dashboard/top-products | 200 | 16.3ms | client=127.0.0.1
+2026-07-10 00:10:37 | INFO     | GET /dashboard/category-breakdown | 200 | 13.2ms | client=127.0.0.1
+2026-07-10 00:10:38 | ERROR    | GET /sales/raw | EXCEPTION | 49.9ms | 4 validation errors:
+  {'type': 'string_type', 'loc': ('response', 64, 'product'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 65, 'category'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 69, 'product'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 70, 'category'), 'msg': 'Input should be a valid string', 'input': None}
+
+  File "C:\Users\Lenovo\OneDrive\Documents\sales_pipeline\backend\main.py", line 591, in get_raw_sales
+    GET /sales/raw
+2026-07-10 00:10:47 | ERROR    | GET /sales/raw | EXCEPTION | 14.6ms | 4 validation errors:
+  {'type': 'string_type', 'loc': ('response', 64, 'product'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 65, 'category'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 69, 'product'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 70, 'category'), 'msg': 'Input should be a valid string', 'input': None}
+
+  File "C:\Users\Lenovo\OneDrive\Documents\sales_pipeline\backend\main.py", line 591, in get_raw_sales
+    GET /sales/raw
+2026-07-10 00:11:59 | INFO     | GET /sales/raw | 200 | 35.6ms | client=127.0.0.1
+2026-07-10 00:12:00 | INFO     | GET /sales/processed | 200 | 40.6ms | client=127.0.0.1
+2026-07-10 00:12:01 | ERROR    | GET /sales/raw | EXCEPTION | 19.3ms | 4 validation errors:
+  {'type': 'string_type', 'loc': ('response', 0, 'product'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 1, 'category'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 5, 'product'), 'msg': 'Input should be a valid string', 'input': None}
+  {'type': 'string_type', 'loc': ('response', 6, 'category'), 'msg': 'Input should be a valid string', 'input': None}
+
+  File "C:\Users\Lenovo\OneDrive\Documents\sales_pipeline\backend\main.py", line 591, in get_raw_sales
+    GET /sales/raw
+2026-07-10 00:12:02 | INFO     | GET /pipeline/history | 200 | 2.1ms | client=127.0.0.1
+2026-07-10 00:12:57 | INFO     | GET /dashboard/summary | 200 | 0.6ms | client=127.0.0.1
+2026-07-10 00:12:58 | INFO     | GET /pipeline/history | 200 | 4.7ms | client=127.0.0.1
+2026-07-10 00:12:59 | ERROR    | revenue trend error: fromisoformat: argument must be str
+2026-07-10 00:12:59 | WARNING  | GET /dashboard/revenue-trend | 500 | 14.7ms | client=127.0.0.1
+2026-07-10 00:13:00 | INFO     | GET /dashboard/top-products | 200 | 10.0ms | client=127.0.0.1
+2026-07-10 00:13:01 | INFO     | GET /dashboard/category-breakdown | 200 | 13.2ms | client=127.0.0.1
+2026-07-10 00:13:02 | INFO     | GET /sales/processed | 200 | 10.3ms | client=127.0.0.1
+2026-07-10 00:13:03 | INFO     | GET /sales/raw | 200 | 10.3ms | client=127.0.0.1
+2026-07-10 00:13:52 | INFO     | GET /admin/users | 200 | 10.0ms | client=127.0.0.1
