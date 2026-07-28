@@ -205,7 +205,7 @@ def show_pipeline_page():
                 )
 
         col_map = {
-            "id": "Run #",
+            "id": "Run",
             "run_at": "Run At",
             "triggered_by": "Triggered By",
             "total_loaded": "Loaded",

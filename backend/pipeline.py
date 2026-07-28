@@ -455,7 +455,7 @@ def write_to_processed(
         return 0, 0
 
     processed_objects = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     
     for _, row in clean_df.iterrows():
         try:
@@ -546,7 +546,7 @@ def run_pipeline(db: Session) -> dict:
     The single entry point for the full ETL pipeline.
     Called by the FastAPI endpoint POST /pipeline/run.
     """
-    pipeline_start = datetime.now(timezone.utc)
+    pipeline_start = datetime.now(timezone.utc).replace(tzinfo=None)
 
     raw_df = load_pending_records(db)
 
@@ -597,7 +597,7 @@ def run_pipeline(db: Session) -> dict:
 
     total_failed = len(failed_df) + write_failed
 
-    pipeline_end = datetime.now(timezone.utc)
+    pipeline_end = datetime.now(timezone.utc).replace(tzinfo=None)
     duration_seconds = (pipeline_end - pipeline_start).total_seconds()
 
     logger.info("=" * 60)

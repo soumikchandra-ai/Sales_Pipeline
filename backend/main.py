@@ -140,7 +140,8 @@ def _acquire_pipeline_lock(db: Session, username: str) -> bool:
 
     if status_row.is_running:
         if status_row.started_at:
-            elapsed = datetime.now(timezone.utc) - status_row.started_at
+            now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+            elapsed = now_naive - status_row.started_at
             if elapsed.total_seconds() > PIPELINE_LOCK_TIMEOUT_MINUTES * 60:
                 pipe_logger.warning(
                     f"Stale pipeline lock detected "
@@ -150,9 +151,9 @@ def _acquire_pipeline_lock(db: Session, username: str) -> bool:
             else:
                 return False
 
-    status_row.is_running  = 1
-    status_row.started_at  = datetime.now(timezone.utc)
-    status_row.locked_by   = username
+    status_row.is_running = 1
+    status_row.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    status_row.locked_by = username
     db.commit()
     return True
 

@@ -18,7 +18,7 @@ class User(Base):
     username = Column(String(100), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     role = Column(String(20), default="viewer")
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda:datetime.now(timezone.utc).replace(tzinfo=None))
     
     sales = relationship("RawSale", back_populates="uploader")
     
@@ -37,7 +37,7 @@ class RawSale(Base):
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     status = Column(String(20), default="pending")
     fail_reason = Column(Text, nullable=True, default=None)
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda:datetime.now(timezone.utc).replace(tzinfo=None))
     
     uploader = relationship("User", back_populates="sales")
     processed = relationship("ProcessedSale", back_populates="raw_sale", uselist=False)
@@ -54,7 +54,7 @@ class ProcessedSale(Base):
     tax = Column(Float, nullable=False, default=0.0)
     discount = Column(Float, nullable=False, default=0.0)
     final_amount= Column(Float, nullable=False)     #total+tax-discount
-    processed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    processed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     
     raw_sale = relationship("RawSale",  back_populates="processed")
     
@@ -68,7 +68,7 @@ class PipelineRun(Base):
     """
     __tablename__ = "pipeline_runs"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    run_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    run_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     total_loaded  = Column(Integer, default=0)
     processed = Column(Integer, default=0)
     failed = Column(Integer, default=0)
