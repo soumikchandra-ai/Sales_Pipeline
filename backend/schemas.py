@@ -12,7 +12,7 @@ class UserRegisterSchema(BaseModel):
         ...,
         min_length=5,
         max_length=50,
-        description="Unique username for an account: 3-50 characters"
+        description="Unique username for an account: 5-50 characters"
     )
     password:str = Field(
         ...,
